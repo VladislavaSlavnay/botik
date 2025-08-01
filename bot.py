@@ -2,7 +2,6 @@ import asyncio
 import os
 from dotenv import load_dotenv
 load_dotenv(dotenv_path='.env', override=True)
-TOKEN = os.getenv("BOT_TOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 834553662
 from aiogram import Bot, Dispatcher, F, Router
@@ -19,11 +18,12 @@ from aiogram.filters import Command, CommandStart, StateFilter
 
 
 class FSMFillForm(StatesGroup):
-        obrsahenie = State()
+    obrsahenie = State()
 
 # ==== НАСТРОЙКИ ====
 FAQ_FILE = "faq.txt"
-
+MAP_FILE = "map.jpg"  # Файл с картой территории
+MENU_FILE = "menu.txt"  # Файл с меню на сегодня
 BASE_PHOTO_DIR = "photo_sections"
 INFO_FILE = "section_info.txt"
 
@@ -33,7 +33,8 @@ SECTIONS = {
     "press": "Пресса",
     "food": "Служба питания",
     "accom": "Служба размещения",
-    "members": "Служба по работе с участниками"
+    "members": "Служба по работе с участниками",
+    "directorate": "Дирекция форума"  # Новый раздел для дирекции
 }
 
 # FSM состояния для администратора
@@ -41,9 +42,6 @@ class AddInfo(StatesGroup):
     waiting_for_section = State()
     waiting_for_text = State()
     waiting_for_photos = State()
-
-
-
 
 # Инициализация
 router = Router()
@@ -72,9 +70,11 @@ def get_photo_paths(section_id):
 # === Кнопки ===
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📋 FAQ")],
-        [KeyboardButton(text="🛠 Бытовые обращения")],
-        [KeyboardButton(text="📸 Дирекция")],
+        [KeyboardButton(text="📝 Найти ответы на вопросы")],
+        [KeyboardButton(text="🏡 Позаботиться о комфорте в глэмпинге")],
+        [KeyboardButton(text="👥 Познакомиться с дирекцией Форума")],
+        [KeyboardButton(text="🗺 Посмотреть карту")],
+        [KeyboardButton(text="🍽 Узнать, чем сегодня кормят")],
     ],
     resize_keyboard=True
 )
@@ -111,25 +111,44 @@ async def save_faq_text(message: Message, state: FSMContext):
 # === Обработчики ===
 @router.message(CommandStart())
 async def start(message: Message):
-    await message.answer("Добро пожаловать! Выберите нужный раздел:", reply_markup=main_kb)
+    welcome_text = (
+    "Привет, хранитель природы! 🌿 Рад видеть тебя на форуме «Экосистема. Заповедный край». "
+    "Я помогу тебе:\n\n"
+    "🏡 Комфортно устроиться в нашем экологичном жилом комплексе\n"
+    "📝 Найти ответы на частые вопросы\n"
+    "🗺 Посмотреть карту"
+    "👥 Познакомиться с командой организаторов\n\n"
+    " 🍽 Узнать, чем сегодня кормят\n"
+    "Выбери нужное действие ниже ↓"
+)
+    await message.answer(welcome_text, reply_markup=main_kb)
 
-@router.message(F.text == "📋 FAQ")
+@router.message(F.text == "📝 Найти ответы на вопросы")
 async def faq(message: Message):
     if os.path.exists(FAQ_FILE):
         with open(FAQ_FILE, "r", encoding="utf-8") as f:
             text = f.read().strip()
     else:
         text = "❓ Часто задаваемые вопросы пока не добавлены."
+    
+    faq_text = (
+        "Здесь мы собрали часто задаваемые вопросы. Просмотри, вдруг ты найдешь здесь ответ для себя:\n\n"
+        f"{text}\n\n"
+        "Если ответ не удалось найти, то задай его кураторам команды"
+    )
+    await message.answer(faq_text)
 
-    await message.answer(text)
-
-@router.message(F.text == "🛠 Бытовые обращения")
+@router.message(F.text == "🏡 Позаботиться о комфорте в глэмпинге")
 async def household_prompt(message: Message, state: FSMContext):
-    await message.answer("Опишите, чего не хватает. Мы передадим это администратору 👇")
+    comfort_text = (
+        "Столкнулся с проблемой по проживанию или быту? Напиши нам, и мы постараемся решить её как можно скорее!\n\n"
+        "Отправь сообщение по форме:\n"
+        "\"Твой вопрос/просьба/описание ситуации, ФИО, номер команды, номер палатки\""
+    )
+    await message.answer(comfort_text)
     await state.set_state(FSMFillForm.obrsahenie)
 
-
-@router.message(StateFilter(FSMFillForm.obrsahenie), lambda x: len(x.text.split())  >= 1)
+@router.message(StateFilter(FSMFillForm.obrsahenie), lambda x: len(x.text.split()) >= 1)
 async def forward_to_admin(message: Message, state: FSMContext):
     if message.text and message.text != "/start":
         await message.answer("✅ Ваше сообщение отправлено администратору.")
@@ -140,10 +159,14 @@ async def forward_to_admin(message: Message, state: FSMContext):
         )
     await state.clear()
 
-
-@router.message(F.text == "📸 Галерея")
-async def gallery(message: Message):
-    await message.answer("Выберите раздел:", reply_markup=section_keyboard())
+@router.message(F.text == "👥 Познакомиться с дирекцией Форума")
+async def directorate(message: Message):
+    directorate_text = (
+        "Смотри, какие замечательные люди создают наш Форум! "
+        "Если будешь встречать их, обязательно поблагодари за их работу 😉\n\n"
+        "Выбери необходимую службу:"
+    )
+    await message.answer(directorate_text, reply_markup=section_keyboard())
 
 @router.callback_query(F.data.startswith("section:"))
 async def show_section(callback: CallbackQuery):
@@ -164,6 +187,31 @@ async def show_section(callback: CallbackQuery):
         except Exception as e:
             await callback.message.answer(f"⚠️ Ошибка при отправке {path}: {e}")
     await callback.answer()
+
+@router.message(F.text == "🗺 Посмотреть карту")
+async def show_map(message: Message):
+    map_text = "Держи карту территории Всероссийского экологического центра \"Экосистема\""
+    await message.answer(map_text)
+    
+    if os.path.exists(MAP_FILE):
+        try:
+            await message.answer_photo(FSInputFile(MAP_FILE))
+        except Exception as e:
+            await message.answer(f"⚠️ Ошибка при отправке карты: {e}")
+    else:
+        await message.answer("❌ Карта территории пока не загружена.")
+
+@router.message(F.text == "🍽 Узнать, чем сегодня кормят")
+async def show_menu(message: Message):
+    menu_text = "Вот меню столовой на сегодня.\nПриятного аппетита!\n\n"
+    
+    if os.path.exists(MENU_FILE):
+        with open(MENU_FILE, "r", encoding="utf-8") as f:
+            menu_text += f.read().strip()
+    else:
+        menu_text += "Меню на сегодня пока не загружено."
+    
+    await message.answer(menu_text)
 
 # === Команда для добавления от админа ===
 @router.message(Command("addinfo"))
@@ -215,11 +263,19 @@ async def admin_done_uploading(message: Message, state: FSMContext):
     await message.answer("✅ Описание и фото обновлены.")
     await state.clear()
 
-
-
 # === Запуск ===
 async def main():
+    # Проверка токена
+    if not BOT_TOKEN or len(BOT_TOKEN) != 46:
+        print(f"ОШИБКА: Неверный токен! Длина: {len(BOT_TOKEN) if BOT_TOKEN else 0}")
+        return
+        
+    # Создаем необходимые папки
     os.makedirs(BASE_PHOTO_DIR, exist_ok=True)
+    
+    # Создаем раздел для дирекции
+    os.makedirs(os.path.join(BASE_PHOTO_DIR, "directorate"), exist_ok=True)
+    
     load_info()
 
     bot = Bot(token=BOT_TOKEN)
