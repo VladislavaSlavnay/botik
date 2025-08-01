@@ -23,8 +23,6 @@ class FSMFillForm(StatesGroup):
 
 # ==== НАСТРОЙКИ ====
 FAQ_FILE = "faq.txt"
-BOT_TOKEN = TOKEN  # Заменил, были просто цифры
-ADMIN_ID = 834553662           # Замени
 
 BASE_PHOTO_DIR = "photo_sections"
 INFO_FILE = "section_info.txt"
