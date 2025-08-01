@@ -1,32 +1,60 @@
 import asyncio
 import os
+import atexit
+import logging
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv(dotenv_path='.env', override=True)
+
+# ===== НАСТРОЙКА ЛОГГИРОВАНИЯ =====
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# ===== ЗАГРУЗКА ПЕРЕМЕННЫХ СРЕДЫ =====
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 834553662
+
+# ===== ИМПОРТЫ ИЗ AIOGRAM =====
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    FSInputFile, CallbackQuery
+    FSInputFile, CallbackQuery,
+    InputMediaPhoto  # ДОБАВЛЕН НЕДОСТАЮЩИЙ ИМПОРТ
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command, CommandStart, StateFilter
 
+# ===== КОНФИГУРАЦИЯ ПУТЕЙ =====
+BASE_PHOTO_DIR = BASE_DIR / "photo_sections"
+FAQ_FILE = BASE_DIR / "faq.txt"
+MAP_FILE = BASE_DIR / "map.jpg"
+MENU_FILE = BASE_DIR / "menu.txt"
+INFO_FILE = BASE_DIR / "section_info.txt"
 
+# ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
+bot = None  # Инициализируется позже
+
+# ===== СОСТОЯНИЯ =====
 class FSMFillForm(StatesGroup):
     obrsahenie = State()
 
-# ==== НАСТРОЙКИ ====
-FAQ_FILE = "faq.txt"
-MAP_FILE = "map.jpg"  # Файл с картой территории
-MENU_FILE = "menu.txt"  # Файл с меню на сегодня
-BASE_PHOTO_DIR = "photo_sections"
-INFO_FILE = "section_info.txt"
+class AddInfo(StatesGroup):
+    waiting_for_section = State()
+    waiting_for_text = State()
+    waiting_for_photos = State()
 
+class SetFAQ(StatesGroup):
+    waiting_for_text = State()
+
+# ===== КОНФИГУРАЦИЯ СЕКЦИЙ =====
 SECTIONS = {
     "vneucheb": "Внеучебная служба",
     "edu": "Образовательная служба",
@@ -34,26 +62,22 @@ SECTIONS = {
     "food": "Служба питания",
     "accom": "Служба размещения",
     "members": "Служба по работе с участниками",
-    "directorate": "Дирекция форума"  # Новый раздел для дирекции
+    "directorate": "Дирекция форума"
 }
 
-# FSM состояния для администратора
-class AddInfo(StatesGroup):
-    waiting_for_section = State()
-    waiting_for_text = State()
-    waiting_for_photos = State()
-
-# Инициализация
+# ===== ИНИЦИАЛИЗАЦИЯ =====
 router = Router()
 section_data = {}
 
-# === Функции для загрузки и сохранения ===
+# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
 def load_info():
-    if os.path.exists(INFO_FILE):
+    if INFO_FILE.exists():
         with open(INFO_FILE, "r", encoding="utf-8") as f:
             for line in f:
-                key, text = line.strip().split("||", 1)
-                section_data[key] = text
+                parts = line.strip().split("||", 1)
+                if len(parts) == 2:
+                    key, text = parts
+                    section_data[key] = text
 
 def save_info():
     with open(INFO_FILE, "w", encoding="utf-8") as f:
@@ -61,13 +85,16 @@ def save_info():
             f.write(f"{key}||{text}\n")
 
 def get_photo_paths(section_id):
-    folder = os.path.join(BASE_PHOTO_DIR, section_id)
-    if not os.path.exists(folder):
+    folder = BASE_PHOTO_DIR / section_id
+    if not folder.exists():
         return []
-    files = sorted(os.listdir(folder))
-    return [os.path.join(folder, f) for f in files if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+    
+    return sorted(
+        [f for f in folder.iterdir() if f.suffix.lower() in ('.jpg', '.jpeg', '.png')],
+        key=lambda f: f.name
+    )
 
-# === Кнопки ===
+# ===== КЛАВИАТУРЫ =====
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📝 Найти ответы на вопросы")],
@@ -86,10 +113,7 @@ def section_keyboard():
     kb.adjust(2)
     return kb.as_markup()
 
-
-class SetFAQ(StatesGroup):
-    waiting_for_text = State()
-
+# ===== ОБРАБОТЧИКИ КОМАНД =====
 @router.message(Command("setfaq"))
 async def set_faq(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -101,42 +125,46 @@ async def set_faq(message: Message, state: FSMContext):
 
 @router.message(SetFAQ.waiting_for_text)
 async def save_faq_text(message: Message, state: FSMContext):
-    with open(FAQ_FILE, "w", encoding="utf-8") as f:
-        f.write(message.text.strip())
-
-    await message.answer("✅ FAQ успешно обновлён.")
+    try:
+        FAQ_FILE.write_text(message.text.strip(), encoding="utf-8")
+        await message.answer("✅ FAQ успешно обновлён.")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения FAQ: {e}")
+        await message.answer("❌ Не удалось сохранить FAQ.")
     await state.clear()
 
-
-# === Обработчики ===
+# ===== ОСНОВНЫЕ ОБРАБОТЧИКИ =====
 @router.message(CommandStart())
 async def start(message: Message):
     welcome_text = (
-    "Привет, хранитель природы! 🌿 Рад видеть тебя на форуме «Экосистема. Заповедный край». "
-    "Я помогу тебе:\n\n"
-    "🏡 Комфортно устроиться в нашем экологичном жилом комплексе\n"
-    "📝 Найти ответы на частые вопросы\n"
-    "🗺 Посмотреть карту"
-    "👥 Познакомиться с командой организаторов\n\n"
-    " 🍽 Узнать, чем сегодня кормят\n"
-    "Выбери нужное действие ниже ↓"
-)
+        "Привет, хранитель природы! 🌿 Рад видеть тебя на форуме «Экосистема. Заповедный край». "
+        "Я помогу тебе:\n\n"
+        "🏡 Комфортно устроиться в нашем экологичном жилом комплексе\n"
+        "📝 Найти ответы на частые вопросы\n"
+        "🗺 Посмотреть карту\n"
+        "👥 Познакомиться с командой организаторов\n"
+        "🍽 Узнать, чем сегодня кормят\n\n"
+        "Выбери нужное действие ниже ↓"
+    )
     await message.answer(welcome_text, reply_markup=main_kb)
 
 @router.message(F.text == "📝 Найти ответы на вопросы")
 async def faq(message: Message):
-    if os.path.exists(FAQ_FILE):
-        with open(FAQ_FILE, "r", encoding="utf-8") as f:
-            text = f.read().strip()
-    else:
-        text = "❓ Часто задаваемые вопросы пока не добавлены."
-    
-    faq_text = (
-        "Здесь мы собрали часто задаваемые вопросы. Просмотри, вдруг ты найдешь здесь ответ для себя:\n\n"
-        f"{text}\n\n"
-        "Если ответ не удалось найти, то задай его кураторам команды"
-    )
-    await message.answer(faq_text)
+    try:
+        if FAQ_FILE.exists():
+            text = FAQ_FILE.read_text(encoding="utf-8").strip()
+        else:
+            text = "❓ Часто задаваемые вопросы пока не добавлены."
+        
+        faq_text = (
+            "Здесь мы собрали часто задаваемые вопросы. Просмотри, вдруг ты найдешь здесь ответ для себя:\n\n"
+            f"{text}\n\n"
+            "Если ответ не удалось найти, то задай его кураторам команды"
+        )
+        await message.answer(faq_text)
+    except Exception as e:
+        logger.error(f"Ошибка загрузки FAQ: {e}")
+        await message.answer("❌ Произошла ошибка при загрузке FAQ.")
 
 @router.message(F.text == "🏡 Позаботиться о комфорте в глэмпинге")
 async def household_prompt(message: Message, state: FSMContext):
@@ -148,15 +176,18 @@ async def household_prompt(message: Message, state: FSMContext):
     await message.answer(comfort_text)
     await state.set_state(FSMFillForm.obrsahenie)
 
-@router.message(StateFilter(FSMFillForm.obrsahenie), lambda x: len(x.text.split()) >= 1)
+@router.message(StateFilter(FSMFillForm.obrsahenie), F.text)
 async def forward_to_admin(message: Message, state: FSMContext):
-    if message.text and message.text != "/start":
+    try:
         await message.answer("✅ Ваше сообщение отправлено администратору.")
         user = message.from_user
-        await message.bot.send_message(
+        await bot.send_message(
             ADMIN_ID,
             f"📩 Бытовое обращение от @{user.username or user.full_name}:\n\n{message.text}"
         )
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения админу: {e}")
+        await message.answer("❌ Не удалось отправить сообщение.")
     await state.clear()
 
 @router.message(F.text == "👥 Познакомиться с дирекцией Форума")
@@ -170,55 +201,69 @@ async def directorate(message: Message):
 
 @router.callback_query(F.data.startswith("section:"))
 async def show_section(callback: CallbackQuery):
-    section_id = callback.data.split(":")[1]
-    name = SECTIONS.get(section_id, "Неизвестно")
-    text = section_data.get(section_id, "Нет описания.")
+    try:
+        section_id = callback.data.split(":")[1]
+        name = SECTIONS.get(section_id, "Неизвестно")
+        text = section_data.get(section_id, "Нет описания.")
 
-    await callback.message.answer(f"📌 <b>{name}</b>\n\n{text}", parse_mode="HTML")
+        await callback.message.answer(f"📌 <b>{name}</b>\n\n{text}", parse_mode="HTML")
 
-    photo_paths = get_photo_paths(section_id)
-    if not photo_paths:
-        await callback.message.answer("❌ Фото пока не загружены.")
-        return
+        photo_paths = get_photo_paths(section_id)
+        if not photo_paths:
+            await callback.message.answer("❌ Фото пока не загружены.")
+            return
 
-    for path in photo_paths:
-        try:
-            await callback.message.answer_photo(FSInputFile(path))
-        except Exception as e:
-            await callback.message.answer(f"⚠️ Ошибка при отправке {path}: {e}")
+        # Отправляем все фото одним сообщением (медиагруппой)
+        media = []
+        for i, path in enumerate(photo_paths):
+            # Для первого фото добавляем подпись
+            if i == 0:
+                media.append(InputMediaPhoto(media=FSInputFile(path), caption=f"{name} (фото {i+1}/{len(photo_paths)})"))
+            else:
+                media.append(InputMediaPhoto(media=FSInputFile(path)))
+        
+        await callback.message.answer_media_group(media)
+    except Exception as e:
+        logger.error(f"Ошибка показа секции: {e}")
+        await callback.message.answer("❌ Произошла ошибка при загрузке информации.")
     await callback.answer()
 
 @router.message(F.text == "🗺 Посмотреть карту")
 async def show_map(message: Message):
-    map_text = "Держи карту территории Всероссийского экологического центра \"Экосистема\""
-    await message.answer(map_text)
-    
-    if os.path.exists(MAP_FILE):
-        try:
+    try:
+        map_text = "Держи карту территории Всероссийского экологического центра \"Экосистема\""
+        await message.answer(map_text)
+
+        if MAP_FILE.exists():
             await message.answer_photo(FSInputFile(MAP_FILE))
-        except Exception as e:
-            await message.answer(f"⚠️ Ошибка при отправке карты: {e}")
-    else:
-        await message.answer("❌ Карта территории пока не загружена.")
+        else:
+            await message.answer("❌ Карта территории пока не загружена.")
+    except Exception as e:
+        logger.error(f"Ошибка показа карты: {e}")
+        await message.answer("❌ Не удалось загрузить карту.")
 
 @router.message(F.text == "🍽 Узнать, чем сегодня кормят")
 async def show_menu(message: Message):
-    menu_text = "Вот меню столовой на сегодня.\nПриятного аппетита!\n\n"
-    
-    if os.path.exists(MENU_FILE):
-        with open(MENU_FILE, "r", encoding="utf-8") as f:
-            menu_text += f.read().strip()
-    else:
-        menu_text += "Меню на сегодня пока не загружено."
-    
-    await message.answer(menu_text)
+    try:
+        menu_text = "Вот меню столовой на сегодня.\nПриятного аппетита!\n\n"
+        
+        if MENU_FILE.exists():
+            menu_text += MENU_FILE.read_text(encoding="utf-8").strip()
+        else:
+            menu_text += "Меню на сегодня пока не загружено."
+        
+        await message.answer(menu_text)
+    except Exception as e:
+        logger.error(f"Ошибка показа меню: {e}")
+        await message.answer("❌ Не удалось загрузить меню.")
 
-# === Команда для добавления от админа ===
+# ===== АДМИН-КОМАНДЫ =====
 @router.message(Command("addinfo"))
 async def add_info_start(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         await message.answer("⛔ Только админ может использовать эту команду.")
         return
+    
     kb = InlineKeyboardBuilder()
     for k, v in SECTIONS.items():
         kb.button(text=v, callback_data=f"admin_set:{k}")
@@ -242,47 +287,88 @@ async def admin_set_text(message: Message, state: FSMContext):
 
 @router.message(AddInfo.waiting_for_photos, F.photo)
 async def admin_save_photos(message: Message, state: FSMContext):
-    data = await state.get_data()
-    section_id = data["section_id"]
-    folder = os.path.join(BASE_PHOTO_DIR, section_id)
-    os.makedirs(folder, exist_ok=True)
+    try:
+        data = await state.get_data()
+        section_id = data["section_id"]
+        folder = BASE_PHOTO_DIR / section_id
+        folder.mkdir(parents=True, exist_ok=True)
 
-    photo = message.photo[-1]
-    count = len(os.listdir(folder)) + 1
-    path = os.path.join(folder, f"{count}.jpg")
-    file = await message.bot.get_file(photo.file_id)
-    await message.bot.download_file(file_path=file.file_path, destination=path)
-
-    await message.answer("📷 Фото добавлено.")
+        photo = message.photo[-1]
+        count = len(list(folder.glob("*"))) + 1
+        path = folder / f"{count}.jpg"
+        
+        file = await bot.get_file(photo.file_id)
+        await bot.download_file(file.file_path, destination=path)
+        
+        await message.answer(f"✅ Фото {count} сохранено.")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения фото: {e}")
+        await message.answer("❌ Не удалось сохранить фото.")
 
 @router.message(Command("done"), AddInfo.waiting_for_photos)
 async def admin_done_uploading(message: Message, state: FSMContext):
-    data = await state.get_data()
-    section_data[data["section_id"]] = data["text"]
-    save_info()
-    await message.answer("✅ Описание и фото обновлены.")
+    try:
+        data = await state.get_data()
+        section_data[data["section_id"]] = data["text"]
+        save_info()
+        await message.answer("✅ Описание и фото обновлены.")
+    except Exception as e:
+        logger.error(f"Ошибка завершения загрузки: {e}")
+        await message.answer("❌ Не удалось сохранить информацию.")
     await state.clear()
 
-# === Запуск ===
+# ===== ЗАВЕРШЕНИЕ РАБОТЫ =====
+async def shutdown():
+    if bot:
+        logger.info("Закрытие сессии бота...")
+        await bot.session.close()
+        logger.info("Сессия закрыта.")
+
+# ===== ЗАПУСК БОТА =====
 async def main():
+    global bot
+    
     # Проверка токена
     if not BOT_TOKEN or len(BOT_TOKEN) != 46:
-        print(f"ОШИБКА: Неверный токен! Длина: {len(BOT_TOKEN) if BOT_TOKEN else 0}")
+        logger.error(f"Неверный токен! Длина: {len(BOT_TOKEN) if BOT_TOKEN else 0}")
         return
-        
-    # Создаем необходимые папки
-    os.makedirs(BASE_PHOTO_DIR, exist_ok=True)
-    
-    # Создаем раздел для дирекции
-    os.makedirs(os.path.join(BASE_PHOTO_DIR, "directorate"), exist_ok=True)
-    
+
+    # Создание папок
+    BASE_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+    (BASE_PHOTO_DIR / "directorate").mkdir(exist_ok=True)
+
+    # Загрузка данных
     load_info()
-
+    
+    # Инициализация бота
     bot = Bot(token=BOT_TOKEN)
-    dp = Dispatcher()
-    dp.include_router(router)
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    
+    try:
+        # Проверка подключения
+        me = await bot.get_me()
+        logger.info(f"Бот запущен: @{me.username} (ID: {me.id})")
+        
+        # Инициализация диспетчера
+        dp = Dispatcher()
+        dp.include_router(router)
+        
+        # Запуск
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Ожидание сообщений...")
+        await dp.start_polling(bot)
+        
+    except Exception as e:
+        logger.exception("Ошибка при запуске бота")
+    finally:
+        await shutdown()
 
+# ===== ТОЧКА ВХОДА =====
 if __name__ == "__main__":
-    asyncio.run(main())
+    atexit.register(lambda: asyncio.run(shutdown()))
+    
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен пользователем")
+    except Exception as e:
+        logger.exception("Критическая ошибка")
