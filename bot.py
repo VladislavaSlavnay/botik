@@ -1,8 +1,10 @@
 import asyncio
 import os
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(dotenv_path='.env', override=True)
 TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = 834553662
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.types import (
@@ -21,7 +23,7 @@ class FSMFillForm(StatesGroup):
 
 # ==== НАСТРОЙКИ ====
 FAQ_FILE = "faq.txt"
-BOT_TOKEN = ""  # Замени
+BOT_TOKEN = TOKEN  # Заменил, были просто цифры
 ADMIN_ID = 834553662           # Замени
 
 BASE_PHOTO_DIR = "photo_sections"
