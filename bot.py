@@ -16,8 +16,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
 BOT_TOKEN = "8467183577:AAHNGHd1SZspIbAmkewKpYwYlYwih4a8tr4"
-ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, ]
-
+ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, 966420322]  # Список ID администраторов
 
 # ===== ИМПОРТЫ ИЗ AIOGRAM =====
 from aiogram import Bot, Dispatcher, F, Router
@@ -60,9 +59,8 @@ class SetProgram(StatesGroup):
 
 # ===== КОНФИГУРАЦИЯ СЕКЦИЙ =====
 SECTIONS = {
-    # Старые разделы
     "vneucheb": "Внеучебная служба",
-    "edu": "Образовательная служба",
+    "edu": "Образовательная служба", 
     "food": "Служба питания",
     "accom": "Служба размещения",
     "members": "Служба по работе с участниками и волонтерами",
@@ -89,6 +87,10 @@ router = Router()
 section_data = {}
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
+def is_admin(user_id: int) -> bool:
+    """Проверяет, является ли пользователь администратором"""
+    return user_id in ADMIN_IDS
+
 def load_info():
     if INFO_FILE.exists():
         with open(INFO_FILE, "r", encoding="utf-8") as f:
@@ -113,6 +115,14 @@ def get_photo_paths(section_id):
         key=lambda f: f.name
     )
 
+async def forward_to_admins(message: Message, text: str):
+    """Отправляет сообщение всем администраторам"""
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, text)
+        except Exception as e:
+            logger.error(f"Ошибка отправки сообщения админу {admin_id}: {e}")
+
 # ===== КЛАВИАТУРЫ =====
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
@@ -126,21 +136,19 @@ main_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Обновленная клавиатура с новыми разделами
 def section_keyboard():
     kb = InlineKeyboardBuilder()
     for key, name in SECTIONS.items():
         kb.button(text=name, callback_data=f"section:{key}")
-    kb.adjust(2)  # 2 кнопки в ряду
+    kb.adjust(2)
     return kb.as_markup()
 
 # ===== ОБРАБОТЧИКИ КОМАНД =====
 @router.message(Command("setfaq"))
 async def set_faq(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         await message.answer("⛔ Только администратор может использовать эту команду.")
         return
-
     await message.answer("✏️ Отправьте новый текст FAQ целиком:")
     await state.set_state(SetFAQ.waiting_for_text)
 
@@ -182,7 +190,6 @@ async def daily_program(message: Message):
                 ))
                 
         await message.answer_media_group(media)
-        
     except Exception as e:
         logger.error(f"Ошибка загрузки программы: {e}")
         await message.answer("❌ Произошла ошибка при загрузке программы.")
@@ -190,7 +197,7 @@ async def daily_program(message: Message):
 # ===== АДМИН-КОМАНДЫ ДЛЯ ПРОГРАММЫ =====
 @router.message(Command("setprogram"))
 async def set_program_start(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_IDS:
+    if not is_admin(message.from_user.id):
         await message.answer("⛔ Только администратор может использовать эту команду.")
         return
         
@@ -271,14 +278,14 @@ async def household_prompt(message: Message, state: FSMContext):
 @router.message(StateFilter(FSMFillForm.obrsahenie), F.text)
 async def forward_to_admin(message: Message, state: FSMContext):
     try:
-        await message.answer("✅ Ваше сообщение отправлено администратору.")
+        await message.answer("✅ Ваше сообщение отправлено администраторам.")
         user = message.from_user
-        await bot.send_message(
-            ADMINS_IDS,
+        await forward_to_admins(
+            message,
             f"📩 Бытовое обращение от @{user.username or user.full_name}:\n\n{message.text}"
         )
     except Exception as e:
-        logger.error(f"Ошибка отправки сообщения админу: {e}")
+        logger.error(f"Ошибка отправки сообщения админам: {e}")
         await message.answer("❌ Не удалось отправить сообщение.")
     await state.clear()
 
@@ -290,7 +297,6 @@ async def directorate(message: Message):
         "Выбери необходимую службу:"
     )
     await message.answer(directorate_text, reply_markup=section_keyboard())
-    
 
 @router.callback_query(F.data.startswith("section:"))
 async def show_section(callback: CallbackQuery):
@@ -356,8 +362,8 @@ async def show_menu(message: Message):
 # ===== АДМИН-КОМАНДЫ =====
 @router.message(Command("addinfo"))
 async def add_info_start(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_IDS:
-        await message.answer("⛔ Только админ может использовать эту команду.")
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ Только администратор может использовать эту команду.")
         return
     
     kb = InlineKeyboardBuilder()
@@ -429,38 +435,55 @@ async def shutdown():
 async def main():
     global bot
     
-    # Проверка токена
-    if not BOT_TOKEN or len(BOT_TOKEN) != 46:
-        logger.error(f"Неверный токен! Длина: {len(BOT_TOKEN) if BOT_TOKEN else 0}")
+    # Улучшенная проверка токена
+    if not BOT_TOKEN or len(BOT_TOKEN) < 30 or ":" not in BOT_TOKEN:
+        logger.error("Неверный формат токена! Токен должен быть в формате '123456789:ABCdefGHIjklMnOpQRSTuVWXyz'")
         return
 
-    # Создание папок
-    BASE_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
-    (BASE_PHOTO_DIR / "directorate").mkdir(exist_ok=True)
-    (BASE_PHOTO_DIR / "program").mkdir(exist_ok=True)
-
-    # Загрузка данных
-    load_info()
-    
-    # Инициализация бота
-    bot = Bot(token=BOT_TOKEN)
-    
     try:
-        # Проверка подключения
-        me = await bot.get_me()
-        logger.info(f"Бот запущен: @{me.username} (ID: {me.id})")
+        # Создание папок
+        BASE_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+        for section in SECTIONS.keys():
+            (BASE_PHOTO_DIR / section).mkdir(exist_ok=True)
+        (BASE_PHOTO_DIR / "program").mkdir(exist_ok=True)
+
+        # Загрузка данных
+        load_info()
         
+        # Инициализация бота с таймаутом
+        bot = Bot(token=BOT_TOKEN, session_timeout=30)
+        
+        # Проверка подключения
+        try:
+            me = await bot.get_me()
+            logger.info(f"Бот успешно подключен: @{me.username} (ID: {me.id})")
+        except Exception as e:
+            logger.error(f"Ошибка подключения к Telegram API: {e}")
+            logger.error("Проверьте:")
+            logger.error("1. Правильность токена")
+            logger.error("2. Доступность API Telegram с вашего сервера")
+            logger.error("3. Интернет-соединение")
+            return
+
         # Инициализация диспетчера
         dp = Dispatcher()
         dp.include_router(router)
         
-        # Запуск
-        await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Ожидание сообщений...")
+        # Настройка вебхука
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Вебхук успешно удален, режим polling")
+        except Exception as e:
+            logger.error(f"Ошибка настройки вебхука: {e}")
+            return
+
+        logger.info("Бот запущен и ожидает сообщений...")
         await dp.start_polling(bot)
         
+    except asyncio.CancelledError:
+        logger.info("Получен сигнал завершения работы")
     except Exception as e:
-        logger.exception("Ошибка при запуске бота")
+        logger.exception(f"Критическая ошибка: {e}")
     finally:
         await shutdown()
 
@@ -474,8 +497,3 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
-
-
-
-
-
