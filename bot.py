@@ -53,6 +53,11 @@ bot = None
 class FSMFillForm(StatesGroup):
     obrsahenie = State()
 
+# Добавляем состояние для загрузки фото дирекции отдельно
+class UploadDirectorPhotos(StatesGroup):
+    waiting_for_photos = State()
+
+
 class AddInfo(StatesGroup):
     waiting_for_section = State()
     waiting_for_text = State()
@@ -93,6 +98,9 @@ SECTIONS = {
 class FSMFillForm(StatesGroup):
     obrsahenie = State()
 
+# Добавляем состояние для загрузки фото дирекции отдельно
+class UploadDirectorPhotos(StatesGroup):
+    waiting_for_photos = State()
 
 class AddInfo(StatesGroup):
     waiting_for_section = State()
@@ -132,6 +140,8 @@ SECTIONS = {
     "protocol": "Протокольная служба",
     "press_service": "Пресс-служба"
 }
+
+APPEALS_FILE = BASE_DIR / "appeals.txt"
 
 # ===== ИНИЦИАЛИЗАЦИЯ =====
 router = Router()
@@ -173,6 +183,9 @@ def get_photo_paths(section_id):
 
 async def forward_to_admins(message: Message, text: str):
     """Отправляет сообщение всем администраторам"""
+    with open(APPEALS_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{message.date.isoformat()}||{message.from_user.id}||{message.from_user.full_name}||{message.text}\n")
+
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(admin_id, text)
@@ -337,26 +350,37 @@ async def household_prompt(message: Message, state: FSMContext):
     comfort_text = (
         "Столкнулся с проблемой по проживанию или быту? Напиши нам, и мы постараемся решить её как можно скорее!\n\n"
         "Отправь сообщение по форме:\n"
-        "\"Твой вопрос/просьба/описание ситуации, ФИО, номер команды, номер палатки\""
+        "\"Твой вопрос/просьба/описание ситуации, ФИО, номер команды, номер палатки\"\n\n"
+        "Чтобы вернуться в меню, отправь /cancel"
     )
-    await message.answer(comfort_text)
+    # Создаем клавиатуру с кнопкой отмены
+    cancel_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="❌ Отмена")]],
+        resize_keyboard=True
+    )
+    await message.answer(comfort_text, reply_markup=cancel_kb)
     await state.set_state(FSMFillForm.obrsahenie)
 
 
 @router.message(StateFilter(FSMFillForm.obrsahenie), F.text)
 async def forward_to_admin(message: Message, state: FSMContext):
+    # Проверка на отмену
+    if message.text.lower() in ["отмена", "/cancel", "❌ отмена"]:
+        await message.answer("❌ Обращение отменено", reply_markup=main_kb)
+        await state.clear()
+        return
+
     try:
-        await message.answer("✅ Ваше сообщение отправлено администраторам.")
+        await message.answer("✅ Ваше сообщение отправлено администраторам.", reply_markup=main_kb)
         user = message.from_user
         await forward_to_admins(
             message,
-            f"📩 Бытовое обращение от @{user.username or user.full_name}:\n\n{message.text}"
+            f"📩 Бытовое обращение от @{user.username or user.full_name} (ID: {user.id}):\n\n{message.text}"
         )
     except Exception as e:
         logger.error(f"Ошибка отправки сообщения админам: {e}")
         await message.answer("❌ Не удалось отправить сообщение.")
     await state.clear()
-
 
 @router.message(F.text == "👥 Познакомиться с дирекцией Форума")
 async def directorate(message: Message):
@@ -433,6 +457,84 @@ async def show_menu(message: Message):
 
 
 # ===== АДМИН-КОМАНДЫ =====
+
+# ===== КОМАНДА ДЛЯ ПРОСМОТРА ОБРАЩЕНИЙ =====
+@router.message(Command("view_appeals"))
+async def view_appeals(message: Message):
+    if not is_admin(message.from_user.id):
+        return await message.answer("⛔️ Только для админов.")
+
+    if not APPEALS_FILE.exists():
+        return await message.answer("❌ Обращений пока нет.")
+
+    try:
+        with open(APPEALS_FILE, "r", encoding="utf-8") as f:
+            appeals = f.readlines()
+
+        if not appeals:
+            return await message.answer("❌ Обращений пока нет.")
+
+        # Показываем последние 10 обращений
+        result = "📝 Последние обращения:\n\n"
+        for i, appeal in enumerate(appeals[-10:], 1):
+            parts = appeal.strip().split("||", 3)
+            if len(parts) < 4:
+                continue
+
+            timestamp, user_id, username, text = parts
+            result += (
+                f"{i}. {timestamp}\n"
+                f"👤 Пользователь: {username} (ID: {user_id})\n"
+                f"📄 Текст: {text}\n"
+                f"──────────────────\n"
+            )
+
+        await message.answer(result)
+    except Exception as e:
+        logger.error(f"Ошибка чтения обращений: {e}")
+        await message.answer("❌ Не удалось загрузить обращения.")
+
+
+# ===== КОМАНДА ДЛЯ ЗАГРУЗКИ ФОТО ДИРЕКЦИИ ОТДЕЛЬНО =====
+@router.message(Command("upload_director_photos"))
+async def upload_director_photos(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return await message.answer("⛔️ Только для админов.")
+
+    await message.answer(
+        "📸 Отправляйте фото для дирекции по одному. "
+        "Для завершения отправьте /done\n\n"
+        "Фото будут добавлены в раздел дирекции."
+    )
+    await state.set_state(UploadDirectorPhotos.waiting_for_photos)
+
+
+@router.message(UploadDirectorPhotos.waiting_for_photos, F.photo)
+async def save_director_photo(message: Message, state: FSMContext):
+    try:
+        section_id = "directorate"  # ID раздела дирекции
+        folder = BASE_PHOTO_DIR / section_id
+        folder.mkdir(parents=True, exist_ok=True)
+
+        photo = message.photo[-1]
+        count = len(list(folder.glob("*"))) + 1
+        path = folder / f"{count}.jpg"
+
+        file = await bot.get_file(photo.file_id)
+        await bot.download_file(file.file_path, destination=path)
+
+        await message.answer(f"✅ Фото {count} сохранено в раздел дирекции.")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения фото дирекции: {e}")
+        await message.answer("❌ Не удалось сохранить фото.")
+
+
+@router.message(Command("done"), UploadDirectorPhotos.waiting_for_photos)
+async def finish_director_upload(message: Message, state: FSMContext):
+    count = len(list((BASE_PHOTO_DIR / "directorate").glob("*")))
+    await message.answer(f"✅ Загрузка фото дирекции завершена! Добавлено {count} фото.")
+    await state.clear()
+
 @router.message(Command("addinfo"))
 async def add_info_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -591,23 +693,33 @@ async def help_admin(message: Message):
         "/setprogram — фото программы (до 4)\n"
         "/addadmin — добавить админа (в ответ на его сообщение)\n"
         "/listadmins — показать текущих админов\n"
+        "/view_appeals — показать последние обращения\n"
+        "/upload_director_photos — загрузить фото дирекции\n"
+        "/shutdown — остановить бота\n"  # Добавлено
         "/done — завершить загрузку фото"
     )
 
 
 # ===== ЗАВЕРШЕНИЕ РАБОТЫ =====
 async def shutdown():
+    global bot
     if bot:
         logger.info("Закрытие сессии бота...")
         try:
+            # Отправляем уведомление администраторам
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(admin_id, "🔴 Бот выключается...")
+                except:
+                    pass
+
+            # Закрываем сессию
             await bot.session.close()
             logger.info("Сессия закрыта корректно")
         except Exception as e:
             logger.error(f"Ошибка при закрытии сессии: {e}")
     else:
         logger.warning("Бот не был инициализирован, закрытие не требуется")
-
-
 # ===== ЗАПУСК БОТА =====
 async def main():
     global bot
@@ -675,4 +787,3 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
-
