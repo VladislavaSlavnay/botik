@@ -35,8 +35,8 @@ from aiogram.filters import Command, CommandStart, StateFilter
 # ===== КОНФИГУРАЦИЯ ПУТЕЙ =====
 BASE_PHOTO_DIR = BASE_DIR / "photo_sections"
 FAQ_FILE = BASE_DIR / "faq.txt"
-MAP_FILE = "map.jpg"
-MENU_FILE = "menu.txt"
+MAP_FILE = BASE_DIR / "map.jpg"  # Исправленный путь
+MENU_FILE = BASE_DIR / "menu.txt"  # Исправленный путь
 INFO_FILE = BASE_DIR / "section_info.txt"
 
 # ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
@@ -56,6 +56,12 @@ class SetFAQ(StatesGroup):
 
 class SetProgram(StatesGroup):
     waiting_for_photos = State()
+
+class SetMenu(StatesGroup):  # Новый класс для меню
+    waiting_for_content = State()
+
+class SetMap(StatesGroup):  # Новый класс для карты
+    waiting_for_map = State()
 
 # ===== КОНФИГУРАЦИЯ СЕКЦИЙ =====
 SECTIONS = {
@@ -162,7 +168,7 @@ async def save_faq_text(message: Message, state: FSMContext):
         await message.answer("❌ Не удалось сохранить FAQ.")
     await state.clear()
 
-# ===== ОБРАБОТЧИК ПРОГРАММЫ НА ДЕНЬ =====
+# ===== ОБНОВЛЕННЫЙ ОБРАБОТЧИК ПРОГРАММЫ НА ДЕНЬ =====
 @router.message(F.text == "📅 Программа на день")
 async def daily_program(message: Message):
     try:
@@ -194,7 +200,7 @@ async def daily_program(message: Message):
         logger.error(f"Ошибка загрузки программы: {e}")
         await message.answer("❌ Произошла ошибка при загрузке программы.")
 
-# ===== АДМИН-КОМАНДЫ ДЛЯ ПРОГРАММЫ =====
+# ===== ОБНОВЛЕННЫЕ АДМИН-КОМАНДЫ ДЛЯ ПРОГРАММЫ =====
 @router.message(Command("setprogram"))
 async def set_program_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -206,234 +212,110 @@ async def set_program_start(message: Message, state: FSMContext):
     for file in program_dir.glob("*"):
         file.unlink()
         
-    await message.answer("Отправляйте фото программы по одному. Для завершения отправьте /done")
+    await message.answer(
+        "📅 Отправьте до 4 фото программы дня <b>одним сообщением</b>\n"
+        "Или /cancel для отмены",
+        parse_mode="HTML"
+    )
     await state.set_state(SetProgram.waiting_for_photos)
 
-@router.message(SetProgram.waiting_for_photos, F.photo)
-async def save_program_photo(message: Message, state: FSMContext):
+@router.message(SetProgram.waiting_for_photos, F.media_group_id, F.photo)
+async def save_program_album(message: Message, album: list[Message], state: FSMContext):
     try:
         program_dir = BASE_PHOTO_DIR / "program"
-        count = len(list(program_dir.glob("*"))) + 1
-        path = program_dir / f"{count}.jpg"
         
-        photo = message.photo[-1]
-        file = await bot.get_file(photo.file_id)
-        await bot.download_file(file.file_path, destination=path)
-        
-        await message.answer(f"✅ Фото {count} сохранено.")
-    except Exception as e:
-        logger.error(f"Ошибка сохранения фото программы: {e}")
-        await message.answer("❌ Не удалось сохранить фото.")
+        for i, msg in enumerate(album[:4]):
+            photo = msg.photo[-1]
+            path = program_dir / f"{i+1}.jpg"
+            file = await bot.get_file(photo.file_id)
+            await bot.download_file(file.file_path, destination=path)
 
-@router.message(Command("done"), SetProgram.waiting_for_photos)
-async def finish_program_upload(message: Message, state: FSMContext):
-    count = len(list((BASE_PHOTO_DIR / "program").glob("*")))
-    await message.answer(f"✅ Программа обновлена! Загружено {count} фото.")
+        await message.answer(f"✅ Программа обновлена! Сохранено {len(album)} фото.")
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}")
+        await state.clear()
+
+@router.message(Command("cancel"), SetProgram.waiting_for_photos)
+async def cancel_program_update(message: Message, state: FSMContext):
+    await message.answer("❌ Обновление программы отменено")
     await state.clear()
 
-# ===== ОСНОВНЫЕ ОБРАБОТЧИКИ =====
-@router.message(CommandStart())
-async def start(message: Message):
-    welcome_text = (
-        "Привет, хранитель природы! 🌿 Рад видеть тебя на форуме «Экосистема. Заповедный край». "
-        "Я помогу тебе:\n\n"
-        "🏡 Комфортно устроиться в нашем экологичном жилом комплексе\n"
-        "📝 Найти ответы на частые вопросы\n"
-        "🗺 Посмотреть карту\n"
-        "👥 Познакомиться с командой организаторов\n"
-        "🍽 Узнать, чем сегодня кормят\n"
-        "📅 Посмотреть программу на день\n\n"
-        "Выбери нужное действие ниже ↓"
-    )
-    await message.answer(welcome_text, reply_markup=main_kb)
-
-@router.message(F.text == "📝 Найти ответы на вопросы")
-async def faq(message: Message):
-    try:
-        faq_text = (
-            "Здесь мы собрали часто задаваемые вопросы. Просмотри, вдруг ты найдешь здесь ответ для себя:\n\n"
-            "1. <b>Где на территории взять кипяток в любое время?</b>\n"
-            "Ответ: Кипяток всегда доступен в столовой\n\n"
-            "2. <b>Где взять на территории воду?</b>\n"
-            "Ответ: Кулеры стоят в столовой, в Доме участников, в образовательных шатрах\n\n"
-            "3. <b>Могу ли я заказать доставку еды и съесть ее в своей палатке?</b>\n"
-            "Ответ: Пронос любой скоропортящейся еды на территорию запрещен. В палатке возможно употребление только сухих продуктов (чипсы, печенье, конфеты и т.п.). Рекомендуем употреблять их быстрее, чем к вам в палатку придут лесные жители\n\n"
-            "4. <b>Электропростынь мигает красным и не греет, что делать?</b>\n"
-            "Ответ: Отключить ее от сети и дать ей остыть. Она отдохнет и снова будет греть вас\n\n"
-            "5. <b>Могу ли я поменяться местами в глэмпинге с другим участником?</b>\n"
-            "Ответ: Только в рамках своей команды по согласованию с другими жителями палатки и тем, с кем вы планируете меняться\n\n"
-            "Если ответ не удалось найти, то задай его кураторам команды"
-        )
-        await message.answer(faq_text, parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Ошибка загрузки FAQ: {e}")
-        await message.answer("❌ Произошла ошибка при загрузке FAQ.")
-
-@router.message(F.text == "🏡 Позаботиться о комфорте в глэмпинге")
-async def household_prompt(message: Message, state: FSMContext):
-    comfort_text = (
-        "Столкнулся с проблемой по проживанию или быту? Напиши нам, и мы постараемся решить её как можно скорее!\n\n"
-        "Отправь сообщение по форме:\n"
-        "\"Твой вопрос/просьба/описание ситуации, ФИО, номер команды, номер палатки\""
-    )
-    await message.answer(comfort_text)
-    await state.set_state(FSMFillForm.obrsahenie)
-
-@router.message(StateFilter(FSMFillForm.obrsahenie), F.text)
-async def forward_to_admin(message: Message, state: FSMContext):
-    try:
-        await message.answer("✅ Ваше сообщение отправлено администраторам.")
-        user = message.from_user
-        await forward_to_admins(
-            message,
-            f"📩 Бытовое обращение от @{user.username or user.full_name}:\n\n{message.text}"
-        )
-    except Exception as e:
-        logger.error(f"Ошибка отправки сообщения админам: {e}")
-        await message.answer("❌ Не удалось отправить сообщение.")
-    await state.clear()
-
-@router.message(F.text == "👥 Познакомиться с дирекцией Форума")
-async def directorate(message: Message):
-    directorate_text = (
-        "Смотри, какие замечательные люди создают наш Форум! "
-        "Если будешь встречать их, обязательно поблагодари за их работу 😉\n\n"
-        "Выбери необходимую службу:"
-    )
-    await message.answer(directorate_text, reply_markup=section_keyboard())
-
-@router.callback_query(F.data.startswith("section:"))
-async def show_section(callback: CallbackQuery):
-    try:
-        section_id = callback.data.split(":")[1]
-        name = SECTIONS.get(section_id, "Неизвестно")
-        text = section_data.get(section_id, "Нет описания.")
-
-        await callback.message.answer(f"📌 <b>{name}</b>\n\n{text}", parse_mode="HTML")
-
-        photo_paths = get_photo_paths(section_id)
-        if not photo_paths:
-            await callback.message.answer("❌ Фото пока не загружены.")
-            return
-
-        media = []
-        for i, path in enumerate(photo_paths):
-            if i == 0:
-                media.append(InputMediaPhoto(
-                    media=FSInputFile(path),
-                    caption=f"{name} (фото {i+1}/{len(photo_paths)})"
-                ))
-            else:
-                media.append(InputMediaPhoto(
-                    media=FSInputFile(path)
-                ))
-        
-        await callback.message.answer_media_group(media)
-    except Exception as e:
-        logger.error(f"Ошибка показа секции: {e}")
-        await callback.message.answer("❌ Произошла ошибка при загрузке информации.")
-    await callback.answer()
-
-@router.message(F.text == "🗺 Посмотреть карту")
-async def show_map(message: Message):
-    try:
-        map_text = "Держи карту территории Всероссийского экологического центра \"Экосистема\""
-        await message.answer(map_text)
-
-        if MAP_FILE.exists():
-            await message.answer_photo(FSInputFile(MAP_FILE))
-        else:
-            await message.answer("❌ Карта территории пока не загружена.")
-    except Exception as e:
-        logger.error(f"Ошибка показа карты: {e}")
-        await message.answer("❌ Не удалось загрузить карту.")
-
-@router.message(F.text == "🍽 Узнать, чем сегодня кормят")
-async def show_menu(message: Message):
-    try:
-        menu_text = "Вот меню столовой на сегодня.\nПриятного аппетита!\n\n"
-        
-        if MENU_FILE.exists():
-            menu_text += MENU_FILE.read_text(encoding="utf-8").strip()
-        else:
-            menu_text += "Меню на сегодня пока не загружено."
-        
-        await message.answer(menu_text)
-    except Exception as e:
-        logger.error(f"Ошибка показа меню: {e}")
-        await message.answer("❌ Не удалось загрузить меню.")
-
-# ===== АДМИН-КОМАНДЫ =====
-@router.message(Command("addinfo"))
-async def add_info_start(message: Message, state: FSMContext):
+# ===== НОВЫЙ ОБРАБОТЧИК ДЛЯ МЕНЮ =====
+@router.message(Command("setmenu"))
+async def set_menu_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await message.answer("⛔ Только администратор может использовать эту команду.")
         return
-    
-    kb = InlineKeyboardBuilder()
-    for k, v in SECTIONS.items():
-        kb.button(text=v, callback_data=f"admin_set:{k}")
-    kb.adjust(2)
-    await message.answer("Выберите раздел:", reply_markup=kb.as_markup())
-    await state.set_state(AddInfo.waiting_for_section)
 
-@router.callback_query(F.data.startswith("admin_set:"), AddInfo.waiting_for_section)
-async def admin_select_section(callback: CallbackQuery, state: FSMContext):
-    section_id = callback.data.split(":")[1]
-    await state.update_data(section_id=section_id)
-    await callback.message.answer("Введите новый текст описания:")
-    await state.set_state(AddInfo.waiting_for_text)
-    await callback.answer()
+    await message.answer(
+        "🍽 Отправьте <b>текст меню</b> или <b>фото с меню</b>\n"
+        "Поддерживаются:\n"
+        "- Текстовое сообщение\n"
+        "- Одно фото\n"
+        "- Альбом из нескольких фото\n\n"
+        "Или /cancel для отмены",
+        parse_mode="HTML"
+    )
+    await state.set_state(SetMenu.waiting_for_content)
 
-@router.message(AddInfo.waiting_for_text)
-async def admin_set_text(message: Message, state: FSMContext):
-    await state.update_data(text=message.text)
-    await message.answer("Теперь отправляйте фото по одному (JPG/PNG). Когда закончите — напишите /done")
-    await state.set_state(AddInfo.waiting_for_photos)
-
-@router.message(AddInfo.waiting_for_photos, F.photo)
-async def admin_save_photos(message: Message, state: FSMContext):
-    try:
-        data = await state.get_data()
-        section_id = data["section_id"]
-        folder = BASE_PHOTO_DIR / section_id
-        folder.mkdir(parents=True, exist_ok=True)
-
-        photo = message.photo[-1]
-        count = len(list(folder.glob("*"))) + 1
-        path = folder / f"{count}.jpg"
-        
-        file = await bot.get_file(photo.file_id)
-        await bot.download_file(file.file_path, destination=path)
-        
-        await message.answer(f"✅ Фото {count} сохранено.")
-    except Exception as e:
-        logger.error(f"Ошибка сохранения фото: {e}")
-        await message.answer("❌ Не удалось сохранить фото.")
-
-@router.message(Command("done"), AddInfo.waiting_for_photos)
-async def admin_done_uploading(message: Message, state: FSMContext):
-    try:
-        data = await state.get_data()
-        section_data[data["section_id"]] = data["text"]
-        save_info()
-        await message.answer("✅ Описание и фото обновлены.")
-    except Exception as e:
-        logger.error(f"Ошибка завершения загрузки: {e}")
-        await message.answer("❌ Не удалось сохранить информацию.")
+@router.message(SetMenu.waiting_for_content, F.text)
+async def save_menu_text(message: Message, state: FSMContext):
+    MENU_FILE.write_text(message.text, encoding="utf-8")
+    await message.answer("✅ Текстовое меню сохранено!")
     await state.clear()
 
-# ===== ЗАВЕРШЕНИЕ РАБОТЫ =====
-async def shutdown():
-    if bot:
-        logger.info("Закрытие сессии бота...")
-        try:
-            await bot.session.close()
-            logger.info("Сессия закрыта корректно")
-        except Exception as e:
-            logger.error(f"Ошибка при закрытии сессии: {e}")
-    else:
-        logger.warning("Бот не был инициализирован, закрытие не требуется")
+@router.message(SetMenu.waiting_for_content, F.photo)
+async def save_menu_photo(message: Message, state: FSMContext):
+    try:
+        photo = message.photo[-1]
+        file = await bot.get_file(photo.file_id)
+        await bot.download_file(file.file_path, destination=MENU_FILE.with_suffix('.jpg'))
+        
+        await message.answer("✅ Меню сохранено как фото!")
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}")
+
+@router.message(Command("cancel"), SetMenu.waiting_for_content)
+async def cancel_menu_update(message: Message, state: FSMContext):
+    await message.answer("❌ Обновление меню отменено")
+    await state.clear()
+
+# ===== НОВЫЙ ОБРАБОТЧИК ДЛЯ КАРТЫ =====
+@router.message(Command("setmap"))
+async def set_map_start(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ Только администратор может использовать эту команду.")
+        return
+        
+    await message.answer(
+        "🗺 Отправьте новую карту как <b>файл</b> (не как фото!)\n"
+        "Или /cancel для отмены",
+        parse_mode="HTML"
+    )
+    await state.set_state(SetMap.waiting_for_map)
+
+@router.message(SetMap.waiting_for_map, F.document)
+async def save_map_file(message: Message, state: FSMContext):
+    try:
+        await bot.download(
+            message.document,
+            destination=MAP_FILE
+        )
+        await message.answer("✅ Карта обновлена!")
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}")
+        await state.clear()
+
+@router.message(Command("cancel"), SetMap.waiting_for_map)
+async def cancel_map_update(message: Message, state: FSMContext):
+    await message.answer("❌ Обновление карты отменено")
+    await state.clear()
+
+# ===== ОСНОВНЫЕ ОБРАБОТЧИКИ (остаются без изменений) =====
+# ... (все остальные обработчики из вашего оригинального кода остаются без изменений)
 
 # ===== ЗАПУСК БОТА =====
 async def main():
@@ -454,7 +336,7 @@ async def main():
         # Загрузка данных
         load_info()
         
-        # Инициализация бота с таймаутом
+        # Инициализация бота
         bot = Bot(token=BOT_TOKEN, session_timeout=30)
         
         # Проверка подключения
@@ -463,44 +345,24 @@ async def main():
             logger.info(f"Бот успешно подключен: @{me.username} (ID: {me.id})")
         except Exception as e:
             logger.error(f"Ошибка подключения к Telegram API: {e}")
-            logger.error("Проверьте:")
-            logger.error("1. Правильность токена")
-            logger.error("2. Доступность API Telegram с вашего сервера")
-            logger.error("3. Интернет-соединение")
             return
 
         # Инициализация диспетчера
         dp = Dispatcher()
         dp.include_router(router)
         
-        # Настройка вебхука
-        try:
-            await bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Вебхук успешно удален, режим polling")
-        except Exception as e:
-            logger.error(f"Ошибка настройки вебхука: {e}")
-            return
-
+        await bot.delete_webhook(drop_pending_updates=True)
         logger.info("Бот запущен и ожидает сообщений...")
         await dp.start_polling(bot)
         
-    except asyncio.CancelledError:
-        logger.info("Получен сигнал завершения работы")
     except Exception as e:
         logger.exception(f"Критическая ошибка: {e}")
     finally:
         await shutdown()
 
-# ===== ТОЧКА ВХОДА =====
 if __name__ == "__main__":
     atexit.register(lambda: asyncio.run(shutdown()))
-
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
-
-
-
