@@ -24,9 +24,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+
+# Получаем токен из переменных среды
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# Добавляем проверку токена перед запуском
+if not BOT_TOKEN or ":" not in BOT_TOKEN:
+    logger.error("❌ Токен бота невалиден или отсутствует!")
+    if not BOT_TOKEN:
+        logger.error("Токен не найден в переменных среды")
+    else:
+        logger.error(f"Текущий токен: {BOT_TOKEN}")
+    exit(1)
 ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, 966420322]
 
 BASE_PHOTO_DIR = BASE_DIR / "photo_sections"
@@ -664,3 +675,4 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
+
