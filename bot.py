@@ -35,8 +35,8 @@ from aiogram.filters import Command, CommandStart, StateFilter
 # ===== КОНФИГУРАЦИЯ ПУТЕЙ =====
 BASE_PHOTO_DIR = BASE_DIR / "photo_sections"
 FAQ_FILE = BASE_DIR / "faq.txt"
-MAP_FILE = BASE_DIR / "map.jpg"
-MENU_FILE = BASE_DIR / "menu.txt"
+MAP_FILE = "map.jpg"
+MENU_FILE = "menu.txt"
 INFO_FILE = BASE_DIR / "section_info.txt"
 
 # ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
@@ -501,5 +501,6 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
+
 
 
