@@ -17,7 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
 BOT_TOKEN = "8467183577:AAHNGHd1SZspIbAmkewKpYwYlYwih4a8tr4"
 ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, ]
-ADMIN_ID = 834553662
+
 
 # ===== ИМПОРТЫ ИЗ AIOGRAM =====
 from aiogram import Bot, Dispatcher, F, Router
@@ -190,7 +190,7 @@ async def daily_program(message: Message):
 # ===== АДМИН-КОМАНДЫ ДЛЯ ПРОГРАММЫ =====
 @router.message(Command("setprogram"))
 async def set_program_start(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id != ADMIN_IDS:
         await message.answer("⛔ Только администратор может использовать эту команду.")
         return
         
@@ -274,7 +274,7 @@ async def forward_to_admin(message: Message, state: FSMContext):
         await message.answer("✅ Ваше сообщение отправлено администратору.")
         user = message.from_user
         await bot.send_message(
-            ADMINS_ID,
+            ADMINS_IDS,
             f"📩 Бытовое обращение от @{user.username or user.full_name}:\n\n{message.text}"
         )
     except Exception as e:
@@ -356,7 +356,7 @@ async def show_menu(message: Message):
 # ===== АДМИН-КОМАНДЫ =====
 @router.message(Command("addinfo"))
 async def add_info_start(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id != ADMIN_IDS:
         await message.answer("⛔ Только админ может использовать эту команду.")
         return
     
@@ -474,6 +474,7 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
+
 
 
 
