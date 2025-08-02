@@ -485,6 +485,104 @@ async def admin_done_uploading(message: Message, state: FSMContext):
         await message.answer("❌ Не удалось сохранить информацию.")
     await state.clear()
 
+# ДОБАВЛЕНИЕ И УДАЛЕНИЕ АДМИНОВ
+
+@router.message(Command("addadmin"))
+async def add_admin(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return await message.answer("⛔️ Только текущий админ может добавить другого администратора.")
+    if not message.reply_to_message:
+        return await message.answer("Ответьте на сообщение пользователя, которого хотите сделать админом.")
+    new_admin_id = message.reply_to_message.from_user.id
+    if new_admin_id in ADMIN_IDS:
+        return await message.answer("✅ Этот пользователь уже админ.")
+    ADMIN_IDS.append(new_admin_id)
+    await message.answer(f"✅ Пользователь {new_admin_id} добавлен в администраторы.")
+
+@router.message(Command("listadmins"))
+async def list_admins(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    admins = "\n".join(str(i) for i in ADMIN_IDS)
+    await message.answer(f"📋 Список админов:\n{admins}")
+
+# УПРОЩЕННЫЕ КОМАНДЫ ДЛЯ ОБНОВЛЕНИЯ МЕНЮ, КАРТЫ, ПРОГРАММЫ (удаляют старые файлы автоматически)
+
+@router.message(Command("setmap"))
+async def set_map(message: Message):
+    if not is_admin(message.from_user.id):
+        return await message.answer("⛔️ Только для админов.")
+    await message.answer("📎 Пришлите новое фото карты.")
+
+@router.message(F.photo, Command("setmap"))
+async def save_map_photo(message: Message):
+    try:
+        if MAP_FILE.exists():
+            MAP_FILE.unlink()
+        photo = message.photo[-1]
+        file = await bot.get_file(photo.file_id)
+        await bot.download_file(file.file_path, destination=MAP_FILE)
+        await message.answer("✅ Карта обновлена.")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения карты: {e}")
+        await message.answer("❌ Не удалось сохранить карту.")
+
+@router.message(Command("setmenu"))
+async def set_menu_start(message: Message):
+    if not is_admin(message.from_user.id):
+        return await message.answer("⛔️ Только для админов.")
+    await message.answer("📄 Пришлите текст или фото нового меню.")
+
+@router.message(F.text, Command("setmenu"))
+async def set_menu_text(message: Message):
+    try:
+        if MENU_FILE.exists():
+            MENU_FILE.unlink()
+        MENU_FILE.write_text(message.text.strip(), encoding="utf-8")
+        await message.answer("✅ Меню обновлено.")
+    except Exception as e:
+        logger.error(f"Ошибка меню: {e}")
+        await message.answer("❌ Не удалось сохранить меню.")
+
+@router.message(F.photo, Command("setmenu"))
+async def set_menu_photo(message: Message):
+    try:
+        if MENU_PHOTO.exists():
+            MENU_PHOTO.unlink()
+        photo = message.photo[-1]
+        file = await bot.get_file(photo.file_id)
+        await bot.download_file(file.file_path, destination=MENU_PHOTO)
+        await message.answer("✅ Фото меню обновлено.")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения фото меню: {e}")
+        await message.answer("❌ Не удалось сохранить фото.")
+
+@router.message(Command("setprogram"))
+async def set_program_start(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return await message.answer("⛔️ Только для админов.")
+    program_dir = BASE_PHOTO_DIR / "program"
+    for file in program_dir.glob("*"):
+        file.unlink()
+    await message.answer("Отправляйте фото новой программы по одному. Для завершения введите /done")
+    await state.set_state(SetProgram.waiting_for_photos)
+
+@router.message(Command("helpadmin"))
+async def help_admin(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer(
+        "🛠 Команды для админов:\n"
+        "/addinfo — обновить описание и фото разделов\n"
+        "/setfaq — обновить FAQ\n"
+        "/setmap — загрузить карту\n"
+        "/setmenu — текст или фото меню\n"
+        "/setprogram — фото программы (до 4)\n"
+        "/addadmin — добавить админа (в ответ на его сообщение)\n"
+        "/listadmins — показать текущих админов\n"
+        "/done — завершить загрузку фото"
+    )
+
 
 # ===== ЗАВЕРШЕНИЕ РАБОТЫ =====
 async def shutdown():
