@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # ===== ЗАГРУЗКА ПЕРЕМЕННЫХ СРЕДЫ =====
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = "8467183577:AAHNGHd1SZspIbAmkewKpYwYlYwih4a8tr4"
 ADMIN_ID = 834553662
 
 # ===== ИМПОРТЫ ИЗ AIOGRAM =====
@@ -25,7 +25,7 @@ from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
     FSInputFile, CallbackQuery,
-    InputMediaPhoto  # ДОБАВЛЕН НЕДОСТАЮЩИЙ ИМПОРТ
+    InputMediaPhoto
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.state import StatesGroup, State
@@ -54,6 +54,9 @@ class AddInfo(StatesGroup):
 class SetFAQ(StatesGroup):
     waiting_for_text = State()
 
+class SetProgram(StatesGroup):
+    waiting_for_photos = State()
+
 # ===== КОНФИГУРАЦИЯ СЕКЦИЙ =====
 SECTIONS = {
     "vneucheb": "Внеучебная служба",
@@ -62,7 +65,8 @@ SECTIONS = {
     "food": "Служба питания",
     "accom": "Служба размещения",
     "members": "Служба по работе с участниками",
-    "directorate": "Дирекция форума"
+    "directorate": "Дирекция форума",
+    "program": "Программа на день"
 }
 
 # ===== ИНИЦИАЛИЗАЦИЯ =====
@@ -102,6 +106,7 @@ main_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="👥 Познакомиться с дирекцией Форума")],
         [KeyboardButton(text="🗺 Посмотреть карту")],
         [KeyboardButton(text="🍽 Узнать, чем сегодня кормят")],
+        [KeyboardButton(text="📅 Программа на день")],
     ],
     resize_keyboard=True
 )
@@ -133,6 +138,76 @@ async def save_faq_text(message: Message, state: FSMContext):
         await message.answer("❌ Не удалось сохранить FAQ.")
     await state.clear()
 
+# ===== ОБРАБОТЧИК ПРОГРАММЫ НА ДЕНЬ =====
+@router.message(F.text == "📅 Программа на день")
+async def daily_program(message: Message):
+    try:
+        program_dir = BASE_PHOTO_DIR / "program"
+        if not program_dir.exists():
+            await message.answer("Программа на день пока не загружена.")
+            return
+            
+        photo_paths = get_photo_paths("program")
+        
+        if not photo_paths:
+            await message.answer("Программа на день пока не загружена.")
+            return
+            
+        media = []
+        for i, path in enumerate(photo_paths):
+            if i == 0:
+                media.append(InputMediaPhoto(
+                    media=FSInputFile(path),
+                    caption="Программа на день 🌞"
+                ))
+            else:
+                media.append(InputMediaPhoto(
+                    media=FSInputFile(path)
+                ))
+                
+        await message.answer_media_group(media)
+        
+    except Exception as e:
+        logger.error(f"Ошибка загрузки программы: {e}")
+        await message.answer("❌ Произошла ошибка при загрузке программы.")
+
+# ===== АДМИН-КОМАНДЫ ДЛЯ ПРОГРАММЫ =====
+@router.message(Command("setprogram"))
+async def set_program_start(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Только администратор может использовать эту команду.")
+        return
+        
+    program_dir = BASE_PHOTO_DIR / "program"
+    program_dir.mkdir(exist_ok=True)
+    for file in program_dir.glob("*"):
+        file.unlink()
+        
+    await message.answer("Отправляйте фото программы по одному. Для завершения отправьте /done")
+    await state.set_state(SetProgram.waiting_for_photos)
+
+@router.message(SetProgram.waiting_for_photos, F.photo)
+async def save_program_photo(message: Message, state: FSMContext):
+    try:
+        program_dir = BASE_PHOTO_DIR / "program"
+        count = len(list(program_dir.glob("*"))) + 1
+        path = program_dir / f"{count}.jpg"
+        
+        photo = message.photo[-1]
+        file = await bot.get_file(photo.file_id)
+        await bot.download_file(file.file_path, destination=path)
+        
+        await message.answer(f"✅ Фото {count} сохранено.")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения фото программы: {e}")
+        await message.answer("❌ Не удалось сохранить фото.")
+
+@router.message(Command("done"), SetProgram.waiting_for_photos)
+async def finish_program_upload(message: Message, state: FSMContext):
+    count = len(list((BASE_PHOTO_DIR / "program").glob("*")))
+    await message.answer(f"✅ Программа обновлена! Загружено {count} фото.")
+    await state.clear()
+
 # ===== ОСНОВНЫЕ ОБРАБОТЧИКИ =====
 @router.message(CommandStart())
 async def start(message: Message):
@@ -143,7 +218,8 @@ async def start(message: Message):
         "📝 Найти ответы на частые вопросы\n"
         "🗺 Посмотреть карту\n"
         "👥 Познакомиться с командой организаторов\n"
-        "🍽 Узнать, чем сегодня кормят\n\n"
+        "🍽 Узнать, чем сегодня кормят\n"
+        "📅 Посмотреть программу на день\n\n"
         "Выбери нужное действие ниже ↓"
     )
     await message.answer(welcome_text, reply_markup=main_kb)
@@ -213,14 +289,17 @@ async def show_section(callback: CallbackQuery):
             await callback.message.answer("❌ Фото пока не загружены.")
             return
 
-        # Отправляем все фото одним сообщением (медиагруппой)
         media = []
         for i, path in enumerate(photo_paths):
-            # Для первого фото добавляем подпись
             if i == 0:
-                media.append(InputMediaPhoto(media=FSInputFile(path), caption=f"{name} (фото {i+1}/{len(photo_paths)})"))
+                media.append(InputMediaPhoto(
+                    media=FSInputFile(path),
+                    caption=f"{name} (фото {i+1}/{len(photo_paths)})"
+                ))
             else:
-                media.append(InputMediaPhoto(media=FSInputFile(path)))
+                media.append(InputMediaPhoto(
+                    media=FSInputFile(path)
+                ))
         
         await callback.message.answer_media_group(media)
     except Exception as e:
@@ -321,8 +400,13 @@ async def admin_done_uploading(message: Message, state: FSMContext):
 async def shutdown():
     if bot:
         logger.info("Закрытие сессии бота...")
-        await bot.session.close()
-        logger.info("Сессия закрыта.")
+        try:
+            await bot.session.close()
+            logger.info("Сессия закрыта корректно")
+        except Exception as e:
+            logger.error(f"Ошибка при закрытии сессии: {e}")
+    else:
+        logger.warning("Бот не был инициализирован, закрытие не требуется")
 
 # ===== ЗАПУСК БОТА =====
 async def main():
@@ -336,6 +420,7 @@ async def main():
     # Создание папок
     BASE_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
     (BASE_PHOTO_DIR / "directorate").mkdir(exist_ok=True)
+    (BASE_PHOTO_DIR / "program").mkdir(exist_ok=True)
 
     # Загрузка данных
     load_info()
@@ -365,7 +450,7 @@ async def main():
 # ===== ТОЧКА ВХОДА =====
 if __name__ == "__main__":
     atexit.register(lambda: asyncio.run(shutdown()))
-    
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
