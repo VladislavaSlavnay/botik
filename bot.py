@@ -126,11 +126,12 @@ main_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# Обновленная клавиатура с новыми разделами
 def section_keyboard():
     kb = InlineKeyboardBuilder()
     for key, name in SECTIONS.items():
         kb.button(text=name, callback_data=f"section:{key}")
-    kb.adjust(2)
+    kb.adjust(2)  # 2 кнопки в ряду
     return kb.as_markup()
 
 # ===== ОБРАБОТЧИКИ КОМАНД =====
@@ -473,6 +474,7 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
+
 
 
 
