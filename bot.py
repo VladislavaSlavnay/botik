@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
 BOT_TOKEN = "8467183577:AAHNGHd1SZspIbAmkewKpYwYlYwih4a8tr4"
+ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, ]
 ADMIN_ID = 834553662
 
 # ===== ИМПОРТЫ ИЗ AIOGRAM =====
@@ -258,7 +259,7 @@ async def forward_to_admin(message: Message, state: FSMContext):
         await message.answer("✅ Ваше сообщение отправлено администратору.")
         user = message.from_user
         await bot.send_message(
-            ADMIN_ID,
+            ADMINS_ID,
             f"📩 Бытовое обращение от @{user.username or user.full_name}:\n\n{message.text}"
         )
     except Exception as e:
@@ -457,3 +458,4 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
+
