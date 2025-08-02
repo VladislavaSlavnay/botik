@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # ===== ЗАГРУЗКА ПЕРЕМЕННЫХ СРЕДЫ =====
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
-BOT_TOKEN = "8467183577:AAHNGHd1SZspIbAmkewKpYwYlYwih4a8tr4"
+BOT_TOKEN = "8467183577:AAF_lfrVZmnL1jIlQRpeVmoV5WFEGs4T4Gw"
 ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, 966420322]  # Список ID администраторов
 
 # ===== ИМПОРТЫ ИЗ AIOGRAM =====
@@ -501,4 +501,5 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
+
 
