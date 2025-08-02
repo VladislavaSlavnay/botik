@@ -289,6 +289,7 @@ async def directorate(message: Message):
         "Выбери необходимую службу:"
     )
     await message.answer(directorate_text, reply_markup=section_keyboard())
+    
 
 @router.callback_query(F.data.startswith("section:"))
 async def show_section(callback: CallbackQuery):
@@ -472,5 +473,6 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
+
 
 
