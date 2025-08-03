@@ -6,7 +6,7 @@ import signal
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, List
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
@@ -50,6 +50,7 @@ MENU_FILE = BASE_DIR / "menu.txt"
 INFO_FILE = BASE_DIR / "section_info.txt"
 APPEALS_FILE = BASE_DIR / "appeals.txt"
 PID_FILE = BASE_DIR / "bot.pid"
+PHOTO_DATA_FILE = BASE_DIR / "photo_data.json"
 
 # Папки для хранения медиа
 MAPS_DIR = BASE_DIR / "maps"
@@ -58,17 +59,13 @@ MAPS_DIR.mkdir(exist_ok=True, parents=True)
 PROGRAM_DIR = BASE_DIR / "program"
 PROGRAM_DIR.mkdir(exist_ok=True, parents=True)
 
+MENU_DIR = BASE_DIR / "menu"
+MENU_DIR.mkdir(exist_ok=True, parents=True)
+
 bot = None
 
-# ===== МОДУЛЬ ДЛЯ РАБОТЫ С ФОТО =====
-import json
-from asyncio import Lock
-from pathlib import Path
-
-PHOTO_DATA_FILE = BASE_DIR / "photo_data.json"
-photo_lock = Lock()
-
-# Структура по умолчанию для JSON-файла
+# ===== УПРОЩЕННОЕ ХРАНЕНИЕ ФОТО =====
+# Структура для хранения фото
 DEFAULT_PHOTO_DATA = {
     "sections": {},
     "program": [],
@@ -77,84 +74,73 @@ DEFAULT_PHOTO_DATA = {
     "menu": None
 }
 
-def initialize_photo_data_file():
-    """Создаёт начальный файл photo_data.json, если он не существует."""
-    if not PHOTO_DATA_FILE.exists():
-        PHOTO_DATA_FILE.write_text(
-            json.dumps(DEFAULT_PHOTO_DATA, ensure_ascii=False, indent=2), 
-            encoding="utf-8"
-        )
-
 def load_photo_data():
-    """Загружает данные из файла photo_data.json."""
+    """Загружает данные о фото"""
     try:
         if not PHOTO_DATA_FILE.exists():
-            initialize_photo_data_file()
+            return DEFAULT_PHOTO_DATA.copy()
+        
         with open(PHOTO_DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        logger.error(f"load_photo_data error: {e}")
+        logger.error(f"Ошибка загрузки photo_data: {e}")
         return DEFAULT_PHOTO_DATA.copy()
 
-async def update_photo_storage(update_fn):
-    """
-    Потокобезопасное обновление данных файла.
-    update_fn — функция, получающая текущие данные и возвращающая обновлённые.
-    """
-    async with photo_lock:
-        data = load_photo_data()
-        updated_data = update_fn(data)
-        try:
-            # Резервная копия
-            with open(PHOTO_DATA_FILE.with_suffix(".bak"), "w", encoding="utf-8") as backup:
-                json.dump(updated_data, backup, indent=2, ensure_ascii=False)
-            # Сохранение основного файла
-            with open(PHOTO_DATA_FILE, "w", encoding="utf-8") as f:
-                json.dump(updated_data, f, indent=2, ensure_ascii=False)
-            return True
-        except Exception as e:
-            logger.error(f"update_photo_storage error: {e}")
-            return False
+def save_photo_data(data):
+    """Сохраняет данные о фото"""
+    try:
+        with open(PHOTO_DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения photo_data: {e}")
+        return False
+
+def update_photo_data(update_fn):
+    """Обновляет данные о фото"""
+    data = load_photo_data()
+    updated_data = update_fn(data)
+    return save_photo_data(updated_data)
 
 # Функции для работы с фото
-async def set_program(file_id_list):
+def set_program(file_id_list: List[str]) -> bool:
     """Установка новой программы дня"""
-    async def updater(data):
+    def updater(data):
         data["program"] = file_id_list
         return data
-    return await update_photo_storage(updater)
+    return update_photo_data(updater)
 
-async def add_section_photo(section_id, file_id):
+def add_section_photo(section_id: str, file_id: str) -> bool:
     """Добавление фото в секцию"""
-    async def updater(data):
+    def updater(data):
         if "sections" not in data:
             data["sections"] = {}
         if section_id not in data["sections"]:
             data["sections"][section_id] = []
         data["sections"][section_id].append(file_id)
         return data
-    return await update_photo_storage(updater)
+    return update_photo_data(updater)
 
-async def set_directorate(file_id_list):
+def set_directorate(file_id_list: List[str]) -> bool:
     """Полная замена фото дирекции"""
-    async def updater(data):
+    def updater(data):
         data["directorate"] = file_id_list
         return data
-    return await update_photo_storage(updater)
+    return update_photo_data(updater)
 
-async def set_menu(file_id):
+def set_menu(file_id: str) -> bool:
     """Замена фото меню"""
-    async def updater(data):
+    def updater(data):
         data["menu"] = file_id
         return data
-    return await update_photo_storage(updater)
+    return update_photo_data(updater)
 
-async def set_map(file_id):
+def set_map(file_id: str) -> bool:
     """Замена карты"""
-    async def updater(data):
+    def updater(data):
         data["map"] = file_id
         return data
-    return await update_photo_storage(updater)
+    return update_photo_data(updater)
 
 # ===== ФУНКЦИИ ДЛЯ РАБОТЫ С ФАЙЛАМИ =====
 async def save_media_file(file_id: str, directory: Path, filename: str) -> bool:
@@ -180,9 +166,6 @@ def get_media_file(directory: Path, filename: str) -> Optional[Path]:
     """Возвращает путь к медиафайлу, если он существует"""
     file_path = directory / filename
     return file_path if file_path.exists() else None
-
-# ===== ИНИЦИАЛИЗАЦИЯ =====
-initialize_photo_data_file()
 
 # Состояния FSM
 class FSMFillForm(StatesGroup):
@@ -319,28 +302,45 @@ async def set_map_command(message: Message):
 async def handle_map_photo(message: Message):
     try:
         file_id = message.photo[-1].file_id
-        if await save_media_file(file_id, MAPS_DIR, "current_map.jpg"):
-            await message.answer("✅ Карта успешно обновлена!")
+        
+        # Сохраняем file_id в хранилище
+        if set_map(file_id):
+            # Сохраняем файл на диск для резервной копии
+            if await save_media_file(file_id, MAPS_DIR, "current_map.jpg"):
+                await message.answer("✅ Карта успешно обновлена!")
+            else:
+                await message.answer("✅ Карта обновлена, но не удалось сохранить резервную копию.")
         else:
-            await message.answer("❌ Не удалось сохранить карту.")
+            await message.answer("❌ Не удалось сохранить карту в хранилище.")
     except Exception as e:
-        logger.error(f"Ошибка сохранения карты: {e}")
+        logger.error(f"Ошибка сохранения карты: {str(e)}")
         await message.answer("❌ Произошла ошибка при сохранении карты.")
 
 @router.message(F.text == "🗺 Посмотреть карту")
 async def show_map(message: Message):
     try:
-        map_path = get_media_file(MAPS_DIR, "current_map.jpg")
-        if map_path:
-            with open(map_path, "rb") as map_file:
-                await message.answer_photo(
-                    map_file, 
-                    caption="Карта территории Всероссийского экологического центра \"Экосистема\""
-                )
+        # Получаем данные о карте из хранилища
+        photo_data = load_photo_data()
+        map_file_id = photo_data.get("map")
+        
+        if map_file_id:
+            await message.answer_photo(
+                map_file_id, 
+                caption="Карта территории Всероссийского экологического центра \"Экосистема\""
+            )
         else:
-            await message.answer("❌ Карта территории пока не загружена.")
+            # Пытаемся загрузить резервную копию с диска
+            map_path = get_media_file(MAPS_DIR, "current_map.jpg")
+            if map_path:
+                with open(map_path, "rb") as map_file:
+                    await message.answer_photo(
+                        map_file, 
+                        caption="Карта территории Всероссийского экологического центра \"Экосистема\""
+                    )
+            else:
+                await message.answer("❌ Карта территории пока не загружена.")
     except Exception as e:
-        logger.error(f"Ошибка показа карты: {e}")
+        logger.error(f"Ошибка показа карты: {str(e)}")
         await message.answer("❌ Не удалось загрузить карту.")
 
 # ===== ОБРАБОТЧИКИ ПРОГРАММЫ =====
@@ -357,53 +357,70 @@ async def set_program_start(message: Message, state: FSMContext):
         except Exception as e:
             logger.error(f"Ошибка удаления файла программы: {e}")
     
+    await state.update_data(file_ids=[])
     await message.answer("✅ Предыдущая программа очищена.\nОтправляйте фото программы по одному. Для завершения отправьте /done")
     await state.set_state(SetProgram.waiting_for_photos)
 
 @router.message(SetProgram.waiting_for_photos, F.photo)
 async def save_program_photo(message: Message, state: FSMContext):
     try:
+        data = await state.get_data()
+        file_ids = data.get("file_ids", [])
         file_id = message.photo[-1].file_id
-        index = len(list(PROGRAM_DIR.glob("*"))) + 1
-        filename = f"program_{index}.jpg"
+        file_ids.append(file_id)
+        await state.update_data(file_ids=file_ids)
         
+        # Сохраняем резервную копию на диск
+        index = len(file_ids)
+        filename = f"program_{index}.jpg"
         if await save_media_file(file_id, PROGRAM_DIR, filename):
             await message.answer(f"✅ Фото программы {index} сохранено.")
         else:
-            await message.answer("❌ Не удалось сохранить фото программы.")
+            await message.answer(f"✅ Фото программы {index} добавлено, но резервная копия не сохранена.")
     except Exception as e:
-        logger.error(f"Ошибка сохранения фото программы: {e}")
+        logger.error(f"Ошибка сохранения фото программы: {str(e)}")
         await message.answer("❌ Не удалось сохранить фото.")
 
 @router.message(Command("done"), SetProgram.waiting_for_photos)
 async def finish_program_upload(message: Message, state: FSMContext):
-    count = len(list(PROGRAM_DIR.glob("*")))
-    await message.answer(f"✅ Программа обновлена! Загружено {count} фото.")
+    try:
+        data = await state.get_data()
+        file_ids = data.get("file_ids", [])
+        
+        # Сохраняем в хранилище
+        if set_program(file_ids):
+            await message.answer(f"✅ Программа обновлена! Загружено {len(file_ids)} фото.")
+        else:
+            await message.answer("❌ Не удалось сохранить программу в хранилище.")
+    except Exception as e:
+        logger.error(f"Ошибка завершения загрузки программы: {str(e)}")
+        await message.answer("❌ Произошла ошибка при сохранении программы.")
     await state.clear()
 
 @router.message(F.text == "📅 Программа на день")
 async def daily_program(message: Message):
     try:
-        program_files = sorted(PROGRAM_DIR.glob("program_*.jpg"))
+        # Получаем данные о программе из хранилища
+        photo_data = load_photo_data()
+        file_ids = photo_data.get("program", [])
         
-        if not program_files:
+        if not file_ids:
             await message.answer("Программа на день пока не загружена.")
             return
 
         media = []
-        for i, file_path in enumerate(program_files):
-            with open(file_path, "rb") as f:
-                if i == 0:
-                    media.append(InputMediaPhoto(
-                        media=f,
-                        caption="Программа на день 🌞"
-                    ))
-                else:
-                    media.append(InputMediaPhoto(media=f))
+        for i, file_id in enumerate(file_ids):
+            if i == 0:
+                media.append(InputMediaPhoto(
+                    media=file_id,
+                    caption="Программа на день 🌞"
+                ))
+            else:
+                media.append(InputMediaPhoto(media=file_id))
 
         await message.answer_media_group(media)
     except Exception as e:
-        logger.error(f"Ошибка загрузки программы: {e}")
+        logger.error(f"Ошибка загрузки программы: {str(e)}")
         await message.answer("❌ Произошла ошибка при загрузке программы.")
 
 # ===== ОСНОВНЫЕ ОБРАБОТЧИКИ =====
@@ -554,7 +571,7 @@ async def upload_director_photos(message: Message, state: FSMContext):
         return await message.answer("⛔️ Только для админов.")
 
     # Очищаем предыдущие фото
-    if await set_directorate([]):
+    if set_directorate([]):
         await message.answer(
             "✅ Предыдущие фото дирекции очищены.\n"
             "📸 Отправляйте фото для дирекции по одному. "
@@ -571,14 +588,9 @@ async def save_director_photo(message: Message, state: FSMContext):
         file_id = message.photo[-1].file_id
         
         # Обновляем хранилище
-        async def updater(data):
-            if "directorate" not in data:
-                data["directorate"] = []
-            data["directorate"].append(file_id)
-            return data
-            
-        if await update_photo_storage(updater):
-            photo_data = load_photo_data()
+        photo_data = load_photo_data()
+        photo_data["directorate"].append(file_id)
+        if save_photo_data(photo_data):
             count = len(photo_data.get("directorate", []))
             await message.answer(f"✅ Фото {count} сохранено в раздел дирекции.")
         else:
@@ -629,7 +641,7 @@ async def admin_save_photos(message: Message, state: FSMContext):
         file_id = message.photo[-1].file_id
         
         # Сохраняем фото в секцию
-        if await add_section_photo(section_id, file_id):
+        if add_section_photo(section_id, file_id):
             photo_data = load_photo_data()
             file_ids = photo_data.get("sections", {}).get(section_id, [])
             count = len(file_ids)
@@ -699,8 +711,12 @@ async def set_menu_text(message: Message):
 async def set_menu_photo(message: Message):
     try:
         file_id = message.photo[-1].file_id
-        if await set_menu(file_id):
-            await message.answer("✅ Фото меню обновлено.")
+        if set_menu(file_id):
+            # Сохраняем резервную копию
+            if await save_media_file(file_id, MENU_DIR, "current_menu.jpg"):
+                await message.answer("✅ Фото меню обновлено.")
+            else:
+                await message.answer("✅ Фото меню обновлено, но резервная копия не сохранена.")
         else:
             await message.answer("❌ Не удалось сохранить фото меню.")
     except Exception as e:
