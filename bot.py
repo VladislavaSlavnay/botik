@@ -29,7 +29,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path("/path/to/bot")
 load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
 
 # Получаем токен из переменных среды
@@ -841,3 +841,4 @@ if __name__ == "__main__":
                 PID_FILE.unlink()
             except:
                 pass
+
