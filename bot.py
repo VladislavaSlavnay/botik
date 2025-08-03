@@ -6,6 +6,7 @@ import signal
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
@@ -19,12 +20,52 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command, CommandStart, StateFilter
 
-# ===== Модуль для работы с фото =====
+# ===== НАСТРОЙКИ =====
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
+
+# Получаем токен из переменных среды
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# Проверка токена
+if not BOT_TOKEN or ":" not in BOT_TOKEN:
+    logger.error("❌ Токен бота невалиден или отсутствует!")
+    if not BOT_TOKEN:
+        logger.error("Токен не найден в переменных среды")
+    else:
+        logger.error(f"Текущий токен: {BOT_TOKEN}")
+    exit(1)
+    
+ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, 966420322]
+
+# Файлы для хранения данных
+FAQ_FILE = BASE_DIR / "faq.txt"
+MENU_FILE = BASE_DIR / "menu.txt"
+INFO_FILE = BASE_DIR / "section_info.txt"
+APPEALS_FILE = BASE_DIR / "appeals.txt"
+PID_FILE = BASE_DIR / "bot.pid"
+
+# Папки для хранения медиа
+MAPS_DIR = BASE_DIR / "maps"
+MAPS_DIR.mkdir(exist_ok=True, parents=True)
+
+PROGRAM_DIR = BASE_DIR / "program"
+PROGRAM_DIR.mkdir(exist_ok=True, parents=True)
+
+bot = None
+
+# ===== МОДУЛЬ ДЛЯ РАБОТЫ С ФОТО =====
 import json
 from asyncio import Lock
 from pathlib import Path
 
-PHOTO_DATA_FILE = Path("photo_data.json")
+PHOTO_DATA_FILE = BASE_DIR / "photo_data.json"
 photo_lock = Lock()
 
 # Структура по умолчанию для JSON-файла
@@ -101,13 +142,6 @@ async def set_directorate(file_id_list):
         return data
     return await update_photo_storage(updater)
 
-async def set_map(file_id):
-    """Замена карты"""
-    async def updater(data):
-        data["map"] = file_id
-        return data
-    return await update_photo_storage(updater)
-
 async def set_menu(file_id):
     """Замена фото меню"""
     async def updater(data):
@@ -115,40 +149,39 @@ async def set_menu(file_id):
         return data
     return await update_photo_storage(updater)
 
-# ===== НАСТРОЙКИ БОТА =====
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+async def set_map(file_id):
+    """Замена карты"""
+    async def updater(data):
+        data["map"] = file_id
+        return data
+    return await update_photo_storage(updater)
 
-BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
+# ===== ФУНКЦИИ ДЛЯ РАБОТЫ С ФАЙЛАМИ =====
+async def save_media_file(file_id: str, directory: Path, filename: str) -> bool:
+    """Сохраняет медиафайл на диск"""
+    try:
+        file = await bot.get_file(file_id)
+        file_path = file.file_path
+        
+        # Создаем целевую папку, если не существует
+        directory.mkdir(exist_ok=True, parents=True)
+        
+        # Формируем путь для сохранения
+        dest_path = directory / filename
+        
+        # Скачиваем и сохраняем файл
+        await bot.download_file(file_path, dest_path)
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения файла: {str(e)}")
+        return False
 
-# Получаем токен из переменных среды
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+def get_media_file(directory: Path, filename: str) -> Optional[Path]:
+    """Возвращает путь к медиафайлу, если он существует"""
+    file_path = directory / filename
+    return file_path if file_path.exists() else None
 
-# Проверка токена
-if not BOT_TOKEN or ":" not in BOT_TOKEN:
-    logger.error("❌ Токен бота невалиден или отсутствует!")
-    if not BOT_TOKEN:
-        logger.error("Токен не найден в переменных среды")
-    else:
-        logger.error(f"Текущий токен: {BOT_TOKEN}")
-    exit(1)
-    
-ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, 966420322]
-
-# Файлы для хранения данных
-FAQ_FILE = BASE_DIR / "faq.txt"
-MENU_FILE = BASE_DIR / "menu.txt"
-INFO_FILE = BASE_DIR / "section_info.txt"
-APPEALS_FILE = BASE_DIR / "appeals.txt"
-PID_FILE = BASE_DIR / "bot.pid"
-
-bot = None
-
-# Инициализация данных фото
+# ===== ИНИЦИАЛИЗАЦИЯ =====
 initialize_photo_data_file()
 
 # Состояния FSM
@@ -275,33 +308,42 @@ async def save_faq_text(message: Message, state: FSMContext):
         await message.answer("❌ Не удалось сохранить FAQ.")
     await state.clear()
 
-# ===== ОБРАБОТЧИК ПРОГРАММЫ НА ДЕНЬ =====
-@router.message(F.text == "📅 Программа на день")
-async def daily_program(message: Message):
+# ===== ОБРАБОТЧИКИ КАРТ =====
+@router.message(Command("setmap"))
+async def set_map_command(message: Message):
+    if not is_admin(message.from_user.id):
+        return await message.answer("⛔️ Только для админов.")
+    await message.answer("📎 Пришлите новое фото карты:")
+
+@router.message(F.photo, Command("setmap"))
+async def handle_map_photo(message: Message):
     try:
-        photo_data = load_photo_data()
-        program_photos = photo_data.get("program", [])
-        
-        if not program_photos:
-            await message.answer("Программа на день пока не загружена.")
-            return
-
-        media = []
-        for i, file_id in enumerate(program_photos):
-            if i == 0:
-                media.append(InputMediaPhoto(
-                    media=file_id,
-                    caption="Программа на день 🌞"
-                ))
-            else:
-                media.append(InputMediaPhoto(media=file_id))
-
-        await message.answer_media_group(media)
+        file_id = message.photo[-1].file_id
+        if await save_media_file(file_id, MAPS_DIR, "current_map.jpg"):
+            await message.answer("✅ Карта успешно обновлена!")
+        else:
+            await message.answer("❌ Не удалось сохранить карту.")
     except Exception as e:
-        logger.error(f"Ошибка загрузки программы: {e}")
-        await message.answer("❌ Произошла ошибка при загрузке программы.")
+        logger.error(f"Ошибка сохранения карты: {e}")
+        await message.answer("❌ Произошла ошибка при сохранении карты.")
 
-# ===== АДМИН-КОМАНДЫ ДЛЯ ПРОГРАММЫ =====
+@router.message(F.text == "🗺 Посмотреть карту")
+async def show_map(message: Message):
+    try:
+        map_path = get_media_file(MAPS_DIR, "current_map.jpg")
+        if map_path:
+            with open(map_path, "rb") as map_file:
+                await message.answer_photo(
+                    map_file, 
+                    caption="Карта территории Всероссийского экологического центра \"Экосистема\""
+                )
+        else:
+            await message.answer("❌ Карта территории пока не загружена.")
+    except Exception as e:
+        logger.error(f"Ошибка показа карты: {e}")
+        await message.answer("❌ Не удалось загрузить карту.")
+
+# ===== ОБРАБОТЧИКИ ПРОГРАММЫ =====
 @router.message(Command("setprogram"))
 async def set_program_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -309,28 +351,24 @@ async def set_program_start(message: Message, state: FSMContext):
         return
 
     # Очищаем предыдущие фото
-    if await set_program([]):
-        await message.answer("✅ Предыдущая программа очищена.\nОтправляйте фото программы по одному. Для завершения отправьте /done")
-        await state.set_state(SetProgram.waiting_for_photos)
-    else:
-        await message.answer("❌ Не удалось очистить предыдущую программу.")
+    for file in PROGRAM_DIR.glob("*"):
+        try:
+            file.unlink()
+        except Exception as e:
+            logger.error(f"Ошибка удаления файла программы: {e}")
+    
+    await message.answer("✅ Предыдущая программа очищена.\nОтправляйте фото программы по одному. Для завершения отправьте /done")
+    await state.set_state(SetProgram.waiting_for_photos)
 
 @router.message(SetProgram.waiting_for_photos, F.photo)
 async def save_program_photo(message: Message, state: FSMContext):
     try:
         file_id = message.photo[-1].file_id
+        index = len(list(PROGRAM_DIR.glob("*"))) + 1
+        filename = f"program_{index}.jpg"
         
-        # Обновляем хранилище
-        async def updater(data):
-            if "program" not in data:
-                data["program"] = []
-            data["program"].append(file_id)
-            return data
-            
-        if await update_photo_storage(updater):
-            photo_data = load_photo_data()
-            count = len(photo_data.get("program", []))
-            await message.answer(f"✅ Фото {count} сохранено.")
+        if await save_media_file(file_id, PROGRAM_DIR, filename):
+            await message.answer(f"✅ Фото программы {index} сохранено.")
         else:
             await message.answer("❌ Не удалось сохранить фото программы.")
     except Exception as e:
@@ -339,10 +377,34 @@ async def save_program_photo(message: Message, state: FSMContext):
 
 @router.message(Command("done"), SetProgram.waiting_for_photos)
 async def finish_program_upload(message: Message, state: FSMContext):
-    photo_data = load_photo_data()
-    count = len(photo_data.get("program", []))
+    count = len(list(PROGRAM_DIR.glob("*")))
     await message.answer(f"✅ Программа обновлена! Загружено {count} фото.")
     await state.clear()
+
+@router.message(F.text == "📅 Программа на день")
+async def daily_program(message: Message):
+    try:
+        program_files = sorted(PROGRAM_DIR.glob("program_*.jpg"))
+        
+        if not program_files:
+            await message.answer("Программа на день пока не загружена.")
+            return
+
+        media = []
+        for i, file_path in enumerate(program_files):
+            with open(file_path, "rb") as f:
+                if i == 0:
+                    media.append(InputMediaPhoto(
+                        media=f,
+                        caption="Программа на день 🌞"
+                    ))
+                else:
+                    media.append(InputMediaPhoto(media=f))
+
+        await message.answer_media_group(media)
+    except Exception as e:
+        logger.error(f"Ошибка загрузки программы: {e}")
+        await message.answer("❌ Произошла ошибка при загрузке программы.")
 
 # ===== ОСНОВНЫЕ ОБРАБОТЧИКИ =====
 @router.message(CommandStart())
@@ -460,24 +522,6 @@ async def show_section(callback: CallbackQuery):
         logger.error(f"Ошибка показа секции: {e}")
         await callback.message.answer("❌ Произошла ошибка при загрузке информации.")
     await callback.answer()
-
-@router.message(F.text == "🗺 Посмотреть карту")
-async def show_map(message: Message):
-    try:
-        map_text = "Держи карту территории Всероссийского экологического центра \"Экосистема\""
-        await message.answer(map_text)
-
-        # Загружаем актуальные данные
-        photo_data = load_photo_data()
-        map_file_id = photo_data.get("map")
-        
-        if map_file_id:
-            await message.answer_photo(map_file_id)
-        else:
-            await message.answer("❌ Карта территории пока не загружена.")
-    except Exception as e:
-        logger.error(f"Ошибка показа карты: {e}")
-        await message.answer("❌ Не удалось загрузить карту.")
 
 @router.message(F.text == "🍽 Узнать, чем сегодня кормят")
 async def show_menu(message: Message):
@@ -635,33 +679,7 @@ async def list_admins(message: Message):
     admins = "\n".join(str(i) for i in ADMIN_IDS)
     await message.answer(f"📋 Список админов:\n{admins}")
 
-# КОМАНДЫ ДЛЯ ОБНОВЛЕНИЯ МЕНЮ, КАРТЫ
-@router.message(Command("testmap"))
-async def test_map(message: Message):
-    test_id = "AgACAgIAAxkBAAIBOWZ..."
-    if await set_map(test_id):
-        await message.answer("✅ Тест записи пройден")
-    else:
-        await message.answer("❌ Ошибка записи")
-
-@router.message(Command("setmap"))
-async def set_map_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return await message.answer("⛔️ Только для админов.")
-    await message.answer("📎 Пришлите новое фото карты в ответ на это сообщение.")
-
-@router.message(F.photo, F.reply_to_message.text.startswith("📎 Пришлите"))
-async def save_map_photo(message: Message):
-    try:
-        file_id = message.photo[-1].file_id
-        if await set_map(file_id):
-            await message.answer("✅ Карта обновлена!")
-        else:
-            await message.answer("❌ Ошибка сохранения.")
-    except Exception as e:
-        logger.error(f"Ошибка сохранения карты: {e}")
-        await message.answer("❌ Критическая ошибка, проверьте логи.")
-
+# КОМАНДЫ ДЛЯ ОБНОВЛЕНИЯ МЕНЮ
 @router.message(Command("setmenu"))
 async def set_menu_start(message: Message):
     if not is_admin(message.from_user.id):
