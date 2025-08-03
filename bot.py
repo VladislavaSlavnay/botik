@@ -636,23 +636,31 @@ async def list_admins(message: Message):
     await message.answer(f"📋 Список админов:\n{admins}")
 
 # КОМАНДЫ ДЛЯ ОБНОВЛЕНИЯ МЕНЮ, КАРТЫ
+@router.message(Command("testmap"))
+async def test_map(message: Message):
+    test_id = "AgACAgIAAxkBAAIBOWZ..."
+    if await set_map(test_id):
+        await message.answer("✅ Тест записи пройден")
+    else:
+        await message.answer("❌ Ошибка записи")
+
 @router.message(Command("setmap"))
 async def set_map_cmd(message: Message):
     if not is_admin(message.from_user.id):
         return await message.answer("⛔️ Только для админов.")
-    await message.answer("📎 Пришлите новое фото карты.")
+    await message.answer("📎 Пришлите новое фото карты в ответ на это сообщение.")
 
-@router.message(F.photo, Command("setmap"))
+@router.message(F.photo, F.reply_to_message.text.startswith("📎 Пришлите"))
 async def save_map_photo(message: Message):
     try:
         file_id = message.photo[-1].file_id
         if await set_map(file_id):
-            await message.answer("✅ Карта обновлена.")
+            await message.answer("✅ Карта обновлена!")
         else:
-            await message.answer("❌ Не удалось сохранить карту.")
+            await message.answer("❌ Ошибка сохранения.")
     except Exception as e:
         logger.error(f"Ошибка сохранения карты: {e}")
-        await message.answer("❌ Не удалось сохранить карту.")
+        await message.answer("❌ Критическая ошибка, проверьте логи.")
 
 @router.message(Command("setmenu"))
 async def set_menu_start(message: Message):
