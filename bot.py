@@ -19,7 +19,103 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command, CommandStart, StateFilter
 
-# ===== НАСТРОЙКИ =====
+# ===== Модуль для работы с фото =====
+import json
+from asyncio import Lock
+from pathlib import Path
+
+PHOTO_DATA_FILE = Path("photo_data.json")
+photo_lock = Lock()
+
+# Структура по умолчанию для JSON-файла
+DEFAULT_PHOTO_DATA = {
+    "sections": {},
+    "program": [],
+    "directorate": [],
+    "map": None,
+    "menu": None
+}
+
+def initialize_photo_data_file():
+    """Создаёт начальный файл photo_data.json, если он не существует."""
+    if not PHOTO_DATA_FILE.exists():
+        PHOTO_DATA_FILE.write_text(
+            json.dumps(DEFAULT_PHOTO_DATA, ensure_ascii=False, indent=2), 
+            encoding="utf-8"
+        )
+
+def load_photo_data():
+    """Загружает данные из файла photo_data.json."""
+    try:
+        if not PHOTO_DATA_FILE.exists():
+            initialize_photo_data_file()
+        with open(PHOTO_DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"load_photo_data error: {e}")
+        return DEFAULT_PHOTO_DATA.copy()
+
+async def update_photo_storage(update_fn):
+    """
+    Потокобезопасное обновление данных файла.
+    update_fn — функция, получающая текущие данные и возвращающая обновлённые.
+    """
+    async with photo_lock:
+        data = load_photo_data()
+        updated_data = update_fn(data)
+        try:
+            # Резервная копия
+            with open(PHOTO_DATA_FILE.with_suffix(".bak"), "w", encoding="utf-8") as backup:
+                json.dump(updated_data, backup, indent=2, ensure_ascii=False)
+            # Сохранение основного файла
+            with open(PHOTO_DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(updated_data, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            logger.error(f"update_photo_storage error: {e}")
+            return False
+
+# Функции для работы с фото
+async def set_program(file_id_list):
+    """Установка новой программы дня"""
+    async def updater(data):
+        data["program"] = file_id_list
+        return data
+    return await update_photo_storage(updater)
+
+async def add_section_photo(section_id, file_id):
+    """Добавление фото в секцию"""
+    async def updater(data):
+        if "sections" not in data:
+            data["sections"] = {}
+        if section_id not in data["sections"]:
+            data["sections"][section_id] = []
+        data["sections"][section_id].append(file_id)
+        return data
+    return await update_photo_storage(updater)
+
+async def set_directorate(file_id_list):
+    """Полная замена фото дирекции"""
+    async def updater(data):
+        data["directorate"] = file_id_list
+        return data
+    return await update_photo_storage(updater)
+
+async def set_map(file_id):
+    """Замена карты"""
+    async def updater(data):
+        data["map"] = file_id
+        return data
+    return await update_photo_storage(updater)
+
+async def set_menu(file_id):
+    """Замена фото меню"""
+    async def updater(data):
+        data["menu"] = file_id
+        return data
+    return await update_photo_storage(updater)
+
+# ===== НАСТРОЙКИ БОТА =====
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -32,7 +128,7 @@ load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
 # Получаем токен из переменных среды
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Добавляем проверку токена перед запуском
+# Проверка токена
 if not BOT_TOKEN or ":" not in BOT_TOKEN:
     logger.error("❌ Токен бота невалиден или отсутствует!")
     if not BOT_TOKEN:
@@ -47,72 +143,13 @@ ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, 966420322]
 FAQ_FILE = BASE_DIR / "faq.txt"
 MENU_FILE = BASE_DIR / "menu.txt"
 INFO_FILE = BASE_DIR / "section_info.txt"
-PHOTO_DATA_FILE = BASE_DIR / "photo_data.json"  # Хранилище file_id
 APPEALS_FILE = BASE_DIR / "appeals.txt"
-PID_FILE = BASE_DIR / "bot.pid"  # Файл для хранения PID процесса
+PID_FILE = BASE_DIR / "bot.pid"
 
 bot = None
 
-# ===== ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ =====
-def load_photo_data():
-    """Загружает данные о фото из JSON-файла"""
-    if PHOTO_DATA_FILE.exists():
-        try:
-            with open(PHOTO_DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Ошибка загрузки photo_data: {e}")
-            return {}
-    return {
-        "sections": {},
-        "program": [],
-        "directorate": [],
-        "map": None,
-        "menu": None
-    }
-
-def save_photo_data(data):
-    """Сохраняет данные о фото в JSON-файл"""
-    try:
-        with open(PHOTO_DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        logger.info(f"Данные фото сохранены в {PHOTO_DATA_FILE}")
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка сохранения photo_data: {e}")
-        return False
-
-def load_info():
-    """Загружает описания разделов"""
-    data = {}
-    if INFO_FILE.exists():
-        try:
-            with open(INFO_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    parts = line.strip().split("||", 1)
-                    if len(parts) == 2:
-                        key, text = parts
-                        data[key] = text
-            logger.info(f"Загружены описания {len(data)} разделов")
-        except Exception as e:
-            logger.error(f"Ошибка загрузки описаний: {e}")
-    return data
-
-def save_info(data):
-    """Сохраняет описания разделов"""
-    try:
-        with open(INFO_FILE, "w", encoding="utf-8") as f:
-            for key, text in data.items():
-                f.write(f"{key}||{text}\n")
-        logger.info(f"Описания разделов сохранены в {INFO_FILE}")
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка сохранения описаний: {e}")
-        return False
-
-# Инициализация данных
-section_data = load_info()
-photo_data = load_photo_data()
+# Инициализация данных фото
+initialize_photo_data_file()
 
 # Состояния FSM
 class FSMFillForm(StatesGroup):
@@ -151,23 +188,49 @@ SECTIONS = {
 
 # ===== ИНИЦИАЛИЗАЦИЯ =====
 router = Router()
+section_data = {}
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-async def forward_to_admins(message: Message, text: str):
+def load_info():
+    """Загружает описания разделов"""
+    if INFO_FILE.exists():
+        try:
+            with open(INFO_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split("||", 1)
+                    if len(parts) == 2:
+                        key, text = parts
+                        section_data[key] = text
+            logger.info(f"Загружены описания {len(section_data)} разделов")
+        except Exception as e:
+            logger.error(f"Ошибка загрузки описаний: {e}")
+
+def save_info():
+    """Сохраняет описания разделов"""
     try:
-        # Сохраняем обращение в файл
+        with open(INFO_FILE, "w", encoding="utf-8") as f:
+            for key, text in section_data.items():
+                f.write(f"{key}||{text}\n")
+        logger.info(f"Описания разделов сохранены в {INFO_FILE}")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения описаний: {e}")
+        return False
+
+async def forward_to_admins(message: Message, text: str):
+    """Пересылает сообщение администраторам"""
+    try:
         with open(APPEALS_FILE, "a", encoding="utf-8") as f:
             f.write(f"{message.date.isoformat()}||{message.from_user.id}||{message.from_user.full_name}||{message.text}\n")
         
-        # Отправляем администраторам
         for admin_id in ADMIN_IDS:
             try:
                 await bot.send_message(admin_id, text)
             except Exception as e:
-                logger.error(f"Ошибка отправки сообщения админу {admin_id}: {e}")
+                logger.error(f"Ошибка отправки админу {admin_id}: {e}")
         return True
     except Exception as e:
         logger.error(f"Ошибка сохранения обращения: {e}")
@@ -216,6 +279,7 @@ async def save_faq_text(message: Message, state: FSMContext):
 @router.message(F.text == "📅 Программа на день")
 async def daily_program(message: Message):
     try:
+        photo_data = load_photo_data()
         program_photos = photo_data.get("program", [])
         
         if not program_photos:
@@ -245,8 +309,7 @@ async def set_program_start(message: Message, state: FSMContext):
         return
 
     # Очищаем предыдущие фото
-    photo_data["program"] = []
-    if save_photo_data(photo_data):
+    if await set_program([]):
         await message.answer("✅ Предыдущая программа очищена.\nОтправляйте фото программы по одному. Для завершения отправьте /done")
         await state.set_state(SetProgram.waiting_for_photos)
     else:
@@ -256,12 +319,17 @@ async def set_program_start(message: Message, state: FSMContext):
 async def save_program_photo(message: Message, state: FSMContext):
     try:
         file_id = message.photo[-1].file_id
-        if "program" not in photo_data:
-            photo_data["program"] = []
-        photo_data["program"].append(file_id)
         
-        if save_photo_data(photo_data):
-            count = len(photo_data["program"])
+        # Обновляем хранилище
+        async def updater(data):
+            if "program" not in data:
+                data["program"] = []
+            data["program"].append(file_id)
+            return data
+            
+        if await update_photo_storage(updater):
+            photo_data = load_photo_data()
+            count = len(photo_data.get("program", []))
             await message.answer(f"✅ Фото {count} сохранено.")
         else:
             await message.answer("❌ Не удалось сохранить фото программы.")
@@ -271,6 +339,7 @@ async def save_program_photo(message: Message, state: FSMContext):
 
 @router.message(Command("done"), SetProgram.waiting_for_photos)
 async def finish_program_upload(message: Message, state: FSMContext):
+    photo_data = load_photo_data()
     count = len(photo_data.get("program", []))
     await message.answer(f"✅ Программа обновлена! Загружено {count} фото.")
     await state.clear()
@@ -363,6 +432,9 @@ async def show_section(callback: CallbackQuery):
 
         await callback.message.answer(f"📌 <b>{name}</b>\n\n{text}", parse_mode="HTML")
 
+        # Загружаем актуальные данные
+        photo_data = load_photo_data()
+        
         # Определяем источник фото
         if section_id == "directorate":
             file_ids = photo_data.get("directorate", [])
@@ -395,7 +467,10 @@ async def show_map(message: Message):
         map_text = "Держи карту территории Всероссийского экологического центра \"Экосистема\""
         await message.answer(map_text)
 
+        # Загружаем актуальные данные
+        photo_data = load_photo_data()
         map_file_id = photo_data.get("map")
+        
         if map_file_id:
             await message.answer_photo(map_file_id)
         else:
@@ -416,8 +491,10 @@ async def show_menu(message: Message):
 
         await message.answer(menu_text)
         
-        # Показываем фото меню, если есть
+        # Загружаем актуальные данные
+        photo_data = load_photo_data()
         menu_photo_id = photo_data.get("menu")
+        
         if menu_photo_id:
             await message.answer_photo(menu_photo_id)
     except Exception as e:
@@ -426,19 +503,19 @@ async def show_menu(message: Message):
 
 # ===== АДМИН-КОМАНДЫ =====
 
-# ===== КОМАНДА ДЛЯ ЗАГРУЗКИ ФОТО ДИРЕКЦИИ ОТДЕЛЬНО =====
+# ===== КОМАНДА ДЛЯ ЗАГРУЗКИ ФОТО ДИРЕКЦИИ =====
 @router.message(Command("upload_director_photos"))
 async def upload_director_photos(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return await message.answer("⛔️ Только для админов.")
 
     # Очищаем предыдущие фото
-    photo_data["directorate"] = []
-    if save_photo_data(photo_data):
+    if await set_directorate([]):
         await message.answer(
             "✅ Предыдущие фото дирекции очищены.\n"
             "📸 Отправляйте фото для дирекции по одному. "
-            "Для завершения отправьте /done"
+            "Для завершения отправьте /done\n\n"
+            "Фото будут добавлены в раздел дирекции."
         )
         await state.set_state(UploadDirectorPhotos.waiting_for_photos)
     else:
@@ -448,21 +525,27 @@ async def upload_director_photos(message: Message, state: FSMContext):
 async def save_director_photo(message: Message, state: FSMContext):
     try:
         file_id = message.photo[-1].file_id
-        if "directorate" not in photo_data:
-            photo_data["directorate"] = []
-        photo_data["directorate"].append(file_id)
         
-        if save_photo_data(photo_data):
-            count = len(photo_data["directorate"])
+        # Обновляем хранилище
+        async def updater(data):
+            if "directorate" not in data:
+                data["directorate"] = []
+            data["directorate"].append(file_id)
+            return data
+            
+        if await update_photo_storage(updater):
+            photo_data = load_photo_data()
+            count = len(photo_data.get("directorate", []))
             await message.answer(f"✅ Фото {count} сохранено в раздел дирекции.")
         else:
-            await message.answer("❌ Не удалось сохранить фото дирекции.")
+            await message.answer("❌ Не удалось сохранить фото.")
     except Exception as e:
         logger.error(f"Ошибка сохранения фото дирекции: {e}")
         await message.answer("❌ Не удалось сохранить фото.")
 
 @router.message(Command("done"), UploadDirectorPhotos.waiting_for_photos)
 async def finish_director_upload(message: Message, state: FSMContext):
+    photo_data = load_photo_data()
     count = len(photo_data.get("directorate", []))
     await message.answer(f"✅ Загрузка фото дирекции завершена! Добавлено {count} фото.")
     await state.clear()
@@ -499,19 +582,13 @@ async def admin_save_photos(message: Message, state: FSMContext):
     try:
         data = await state.get_data()
         section_id = data["section_id"]
-        
-        # Инициализируем хранилище для раздела, если нужно
-        if "sections" not in photo_data:
-            photo_data["sections"] = {}
-        if section_id not in photo_data["sections"]:
-            photo_data["sections"][section_id] = []
-            
-        # Сохраняем file_id
         file_id = message.photo[-1].file_id
-        photo_data["sections"][section_id].append(file_id)
         
-        if save_photo_data(photo_data):
-            count = len(photo_data["sections"][section_id])
+        # Сохраняем фото в секцию
+        if await add_section_photo(section_id, file_id):
+            photo_data = load_photo_data()
+            file_ids = photo_data.get("sections", {}).get(section_id, [])
+            count = len(file_ids)
             await message.answer(f"✅ Фото {count} сохранено для раздела.")
         else:
             await message.answer("❌ Не удалось сохранить фото.")
@@ -526,8 +603,10 @@ async def admin_done_uploading(message: Message, state: FSMContext):
         section_id = data["section_id"]
         section_data[section_id] = data["text"]
         
-        if save_info(section_data):
-            count = len(photo_data.get("sections", {}).get(section_id, []))
+        if save_info():
+            photo_data = load_photo_data()
+            file_ids = photo_data.get("sections", {}).get(section_id, [])
+            count = len(file_ids)
             await message.answer(f"✅ Описание и {count} фото обновлены.")
         else:
             await message.answer("❌ Не удалось сохранить информацию.")
@@ -556,9 +635,9 @@ async def list_admins(message: Message):
     admins = "\n".join(str(i) for i in ADMIN_IDS)
     await message.answer(f"📋 Список админов:\n{admins}")
 
-# УПРОЩЕННЫЕ КОМАНДЫ ДЛЯ ОБНОВЛЕНИЯ МЕНЮ, КАРТЫ
+# КОМАНДЫ ДЛЯ ОБНОВЛЕНИЯ МЕНЮ, КАРТЫ
 @router.message(Command("setmap"))
-async def set_map(message: Message):
+async def set_map_cmd(message: Message):
     if not is_admin(message.from_user.id):
         return await message.answer("⛔️ Только для админов.")
     await message.answer("📎 Пришлите новое фото карты.")
@@ -567,8 +646,7 @@ async def set_map(message: Message):
 async def save_map_photo(message: Message):
     try:
         file_id = message.photo[-1].file_id
-        photo_data["map"] = file_id
-        if save_photo_data(photo_data):
+        if await set_map(file_id):
             await message.answer("✅ Карта обновлена.")
         else:
             await message.answer("❌ Не удалось сохранить карту.")
@@ -595,8 +673,7 @@ async def set_menu_text(message: Message):
 async def set_menu_photo(message: Message):
     try:
         file_id = message.photo[-1].file_id
-        photo_data["menu"] = file_id
-        if save_photo_data(photo_data):
+        if await set_menu(file_id):
             await message.answer("✅ Фото меню обновлено.")
         else:
             await message.answer("❌ Не удалось сохранить фото меню.")
@@ -662,6 +739,9 @@ async def main():
         return
 
     try:
+        # Загрузка данных
+        load_info()
+
         # Инициализация бота с таймаутом
         bot = Bot(token=BOT_TOKEN, session_timeout=30)
 
@@ -705,7 +785,8 @@ if __name__ == "__main__":
     def handle_exit(signum, frame):
         logger.info(f"Получен сигнал {signum}, завершение работы...")
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(shutdown())
+        if loop.is_running():
+            loop.create_task(shutdown())
         sys.exit(0)
     
     # Регистрируем обработчики сигналов
@@ -715,15 +796,17 @@ if __name__ == "__main__":
     try:
         # Проверка на уже запущенный экземпляр
         if PID_FILE.exists():
-            try:
-                with open(PID_FILE, "r") as f:
-                    old_pid = int(f.read().strip())
-                # Проверяем, существует ли процесс (для Linux)
-                if sys.platform != "win32" and os.path.exists(f"/proc/{old_pid}"):
-                    logger.error("❌ Бот уже запущен! Остановите предыдущий экземпляр.")
-                    sys.exit(1)
-            except:
-                pass
+            with open(PID_FILE, "r") as f:
+                old_pid = int(f.read().strip())
+                
+            # Проверяем, существует ли процесс (для Linux)
+            if sys.platform != "win32" and os.path.exists(f"/proc/{old_pid}"):
+                logger.error("❌ Бот уже запущен! Остановите предыдущий экземпляр.")
+                sys.exit(1)
+            else:
+                # Для Windows просто удаляем устаревший файл
+                PID_FILE.unlink()
+                logger.warning("Удален устаревший PID-файл")
                 
         # Сохраняем PID текущего процесса
         with open(PID_FILE, "w") as f:
