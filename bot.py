@@ -9,6 +9,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 from typing import Optional, List, Dict, Tuple
 
+load_dotenv()
+
+DATA_DIR = Path(os.getenv("DATA_PATH", "data"))  # По умолчанию 'data/', если переменной нет
+DATA_DIR.mkdir(exist_ok=True)
+
 import aiogram
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
@@ -841,4 +846,5 @@ if __name__ == "__main__":
                 PID_FILE.unlink()
             except:
                 pass
+
 
