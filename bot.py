@@ -80,6 +80,10 @@ photo_data = load_photo_data()
 
 
 # Состояния FSM
+
+class SetMenu(StatesGroup):
+    waiting_for_content = State()
+
 class FSMFillForm(StatesGroup):
     obrsahenie = State()
 
@@ -711,3 +715,4 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
+
