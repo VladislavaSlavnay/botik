@@ -584,32 +584,48 @@ async def save_map_photo(message: Message):
 
 
 @router.message(Command("setmenu"))
-async def set_menu_start(message: Message):
+async def set_menu_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return await message.answer("⛔️ Только для админов.")
-    await message.answer("📄 Пришлите текст или фото нового меню.")
+    await message.answer(
+        "📄 Пришлите текст или фото нового меню.\n"
+        "Для отмены отправьте /cancel"
+    )
+    await state.set_state(SetMenu.waiting_for_content)
 
-
-@router.message(F.text, Command("setmenu"))
-async def set_menu_text(message: Message):
+@router.message(SetMenu.waiting_for_content, F.text)
+async def set_menu_text(message: Message, state: FSMContext):
     try:
         MENU_FILE.write_text(message.text.strip(), encoding="utf-8")
+        # Очищаем фото меню, если был текст
+        photo_data["menu"] = None
+        save_photo_data(photo_data)
         await message.answer("✅ Текстовое меню обновлено.")
     except Exception as e:
-        logger.error(f"Ошибка меню: {e}")
+        logger.error(f"Ошибка сохранения меню: {e}")
         await message.answer("❌ Не удалось сохранить меню.")
+    await state.clear()
 
-
-@router.message(F.photo, Command("setmenu"))
-async def set_menu_photo(message: Message):
+@router.message(SetMenu.waiting_for_content, F.photo)
+async def set_menu_photo(message: Message, state: FSMContext):
     try:
         file_id = message.photo[-1].file_id
         photo_data["menu"] = file_id
         save_photo_data(photo_data)
+        # Очищаем текстовое меню, если было фото
+        if MENU_FILE.exists():
+            MENU_FILE.unlink()
         await message.answer("✅ Фото меню обновлено.")
     except Exception as e:
         logger.error(f"Ошибка сохранения фото меню: {e}")
         await message.answer("❌ Не удалось сохранить фото.")
+    await state.clear()
+
+@router.message(Command("cancel"), SetMenu.waiting_for_content)
+async def cancel_menu_update(message: Message, state: FSMContext):
+    await message.answer("❌ Обновление меню отменено.")
+    await state.clear()
+    
 
 
 @router.message(Command("helpadmin"))
@@ -715,4 +731,5 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
+
 
