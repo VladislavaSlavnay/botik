@@ -40,7 +40,7 @@ if not BOT_TOKEN or ":" not in BOT_TOKEN:
         logger.error(f"Текущий токен: {BOT_TOKEN}")
     exit(1)
 
-ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, 966420322, 1852003919, 834553662]
+ADMIN_IDS = [834553662, 553588882, 2054326653, 1852003919, 966420322, 1852003919, 922760341, 1297618468]
 
 # Файлы для хранения данных
 FAQ_FILE = BASE_DIR / "faq.txt"
@@ -725,6 +725,7 @@ if __name__ == "__main__":
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.exception("Критическая ошибка")
+
 
 
 
